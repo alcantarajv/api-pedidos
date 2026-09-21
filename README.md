@@ -4,7 +4,7 @@ API REST de pedidos com pagamento por gateway externo, construída em Java 21 co
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
 
-> **Status:** em construção — Etapa 0 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 1 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -16,6 +16,7 @@ O que este projeto resolve não é o CRUD de produtos — é o que acontece quan
 - [Decisões técnicas](#decisões-técnicas)
 - [Modelo de domínio](#modelo-de-domínio)
 - [Regras de negócio](#regras-de-negócio)
+- [Como rodar](#como-rodar)
 - [Stack](#stack)
 - [Roadmap](#roadmap)
 
@@ -119,6 +120,26 @@ Nenhuma regra chama `Instant.now()` diretamente. "Pedido não pago expira em N m
 
 Chave da API do gateway e segredo de assinatura do webhook entram só por variável de ambiente. Este projeto lida com pagamento: a assinatura do webhook é o que impede qualquer pessoa na internet de confirmar pedidos de graça, e vazá-la no Git anularia a proteção inteira.
 
+### O schema pertence ao Flyway, não ao Hibernate
+
+`spring.jpa.hibernate.ddl-auto=validate`: o Hibernate confere se o mapeamento bate com as tabelas e recusa subir se não bater, mas não cria nem altera nada. Com `update`, o schema vira consequência do código — o banco de produção passa a ter a forma que o Hibernate decidiu numa migração que ninguém revisou, e não existe registro de quando cada coluna nasceu. Toda mudança de schema aqui passa por um arquivo versionado em `db/migration`.
+
+### Confirmação de publicação ligada desde o começo
+
+`spring.rabbitmq.publisher-confirm-type=correlated`. Sem isso, "publiquei a mensagem" significa apenas "escrevi no socket" — a aplicação nunca fica sabendo se o broker aceitou. O worker do outbox precisa dessa confirmação para marcar a linha como entregue com honestidade; ligar depois seria descobrir na Etapa 8 que o alicerce estava faltando.
+
+### Testes unitários e de integração separados por plugin
+
+O Surefire roda `*Test` (unitários, sem dependência externa) e o Failsafe roda `*IT` (integração, exigem Docker). `mvnw test` continua rápido o suficiente para rodar a cada alteração; `mvnw verify` roda a suíte inteira. Sem a separação, todo teste passa a custar o tempo de subir contêineres, e o preço acaba sendo rodar menos teste.
+
+### PostgreSQL e RabbitMQ de verdade nos testes
+
+Os testes de integração sobem os dois em contêiner com Testcontainers, com `@ServiceConnection` injetando as credenciais no Spring. Não há substituto em memória honesto para nenhum dos dois neste projeto: a idempotência depende do erro de unicidade específico do PostgreSQL, e o outbox depende de um broker que pode mesmo falhar.
+
+### O `docker compose` sobe a infraestrutura desde a primeira etapa
+
+Banco e broker estão no `compose.yaml` antes de existir qualquer entidade. A alternativa — adicionar o RabbitMQ só na etapa em que ele aparece — daria um projeto que funciona na máquina de quem o escreveu e falha na de qualquer outra pessoa, por depender de infraestrutura instalada à mão e não registrada em lugar nenhum.
+
 ---
 
 ## Modelo de domínio
@@ -154,6 +175,44 @@ Transições inválidas são recusadas pelo domínio: um pedido `ENTREGUE` não 
 
 ---
 
+## Como rodar
+
+Pré-requisitos: Java 21 e Docker. O Maven não precisa estar instalado — o wrapper (`mvnw`) baixa a versão certa.
+
+```bash
+cp .env.example .env
+docker compose up -d
+./mvnw spring-boot:run
+```
+
+A aplicação sobe em <http://localhost:8080> e o painel do RabbitMQ em <http://localhost:15672> (usuário e senha `pedidos`).
+
+```bash
+curl http://localhost:8080/actuator/health
+```
+
+O `health` agrega o estado do banco e do broker: se qualquer um dos dois estiver fora, a resposta é `DOWN` com o detalhe de qual falhou.
+
+### Sem Docker Compose
+
+Pela IDE, a classe `TestPedidosApplication` sobe a aplicação com PostgreSQL e RabbitMQ descartáveis via Testcontainers — as duas dependências nascem com o processo e morrem junto, e cada execução começa com o banco limpo.
+
+### Testes
+
+```bash
+./mvnw test
+```
+
+Roda só os unitários — rápido, sem Docker.
+
+```bash
+./mvnw verify
+```
+
+Roda também os testes de integração (`*IT`), que sobem contêineres de verdade e por isso exigem Docker ligado.
+
+---
+
 ## Stack
 
 Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway · JPA/Hibernate · Stripe · JUnit 5 · AssertJ · Testcontainers · WireMock · Docker · GitHub Actions
@@ -163,7 +222,7 @@ Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway 
 ## Roadmap
 
 - [x] **Etapa 0** — Repositório: README, `.gitignore`, primeiro commit
-- [ ] **Etapa 1** — Scaffold Spring Boot + Docker Compose com PostgreSQL e RabbitMQ
+- [x] **Etapa 1** — Scaffold Spring Boot + Docker Compose com PostgreSQL e RabbitMQ
 - [ ] **Etapa 2** — Catálogo: `Produto`, migrations, CRUD administrativo, controle de estoque
 - [ ] **Etapa 3** — Autenticação: `Usuario`, Spring Security, JWT, papéis `CLIENTE` e `ADMIN`
 - [ ] **Etapa 4** — Criação de pedido: itens, congelamento de preço, reserva de estoque, `Idempotency-Key`

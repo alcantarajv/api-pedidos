@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: pedidos-db
+    environment:
+      POSTGRES_DB: pedidos
+      POSTGRES_USER: pedidos
+      POSTGRES_PASSWORD: pedidos
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "5432:5432"
+    volumes:
+      - pedidos-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pedidos -d pedidos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # A imagem "-management" traz o painel web em http://localhost:15672.
+  # Vale o tamanho extra: a fila e o lugar onde as mensagens somem sem deixar
+  # rastro, e poder olhar a fila enquanto se depura o outbox economiza horas.
+  broker:
+    image: rabbitmq:4-management-alpine
+    container_name: pedidos-broker
+    environment:
+      RABBITMQ_DEFAULT_USER: pedidos
+      RABBITMQ_DEFAULT_PASS: pedidos
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - pedidos-broker-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+volumes:
+  pedidos-db-data:
+  pedidos-broker-data:
