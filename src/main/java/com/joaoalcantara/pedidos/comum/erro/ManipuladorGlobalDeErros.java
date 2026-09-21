@@ -4,6 +4,8 @@ import java.net.URI;
 import java.time.Instant;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -16,6 +18,9 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
+import com.joaoalcantara.pedidos.webhook.dominio.AssinaturaInvalidaException;
+import com.joaoalcantara.pedidos.webhook.dominio.EventoMalFormadoException;
+
 /**
  * Traduz excecoes em respostas no formato Problem Details (RFC 9457).
  *
@@ -25,6 +30,10 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
  */
 @RestControllerAdvice
 public class ManipuladorGlobalDeErros extends ResponseEntityExceptionHandler {
+
+    // Logger proprio: o "logger" herdado de ResponseEntityExceptionHandler e o
+    // Commons Logging, com assinaturas diferentes das do SLF4J.
+    private static final Logger log = LoggerFactory.getLogger(ManipuladorGlobalDeErros.class);
 
     private static final String BASE_TIPO = "https://api.pedidos.dev/erros/";
 
@@ -68,6 +77,28 @@ public class ManipuladorGlobalDeErros extends ResponseEntityExceptionHandler {
     public ProblemDetail trataGatewayIndisponivel(GatewayIndisponivelException e) {
         return problema(HttpStatus.BAD_GATEWAY, "gateway-indisponivel",
                 "Gateway indisponivel", e.getMessage());
+    }
+
+    /**
+     * Webhook com assinatura ausente, invalida ou vencida: 401.
+     *
+     * <p>A mensagem nao diz <i>qual</i> das tres coisas falhou. Para quem tem o
+     * segredo, tanto faz — nunca vai cair aqui; para quem nao tem, cada detalhe
+     * e uma dica de como chegar mais perto.</p>
+     */
+    @ExceptionHandler(AssinaturaInvalidaException.class)
+    public ProblemDetail trataAssinaturaInvalida(AssinaturaInvalidaException e) {
+        // O motivo real vai para o log, onde e util para depurar configuracao.
+        log.warn("Webhook recusado: {}", e.getMessage());
+        return problema(HttpStatus.UNAUTHORIZED, "assinatura-invalida",
+                "Assinatura invalida", "A assinatura da requisicao nao pode ser verificada");
+    }
+
+    /** Corpo de webhook fora do formato esperado: 400, reenviar igual nao adianta. */
+    @ExceptionHandler(EventoMalFormadoException.class)
+    public ProblemDetail trataEventoMalFormado(EventoMalFormadoException e) {
+        return problema(HttpStatus.BAD_REQUEST, "evento-mal-formado",
+                "Evento mal formado", e.getMessage());
     }
 
     /** Falhas de Bean Validation nos DTOs de entrada: 400 com a lista de campos. */

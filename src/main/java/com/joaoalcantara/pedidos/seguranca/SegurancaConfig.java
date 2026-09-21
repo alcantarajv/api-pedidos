@@ -45,6 +45,12 @@ public class SegurancaConfig {
                         .requestMatchers(HttpMethod.POST, "/api/auth/registrar", "/api/auth/login").permitAll()
                         .requestMatchers("/actuator/health/**").permitAll()
 
+                        // O gateway chama sem token — nao existe usuario numa
+                        // chamada feita por outro servidor. Quem autentica esta
+                        // rota e a assinatura HMAC do corpo, verificada antes de
+                        // qualquer processamento.
+                        .requestMatchers(HttpMethod.POST, "/api/webhooks/**").permitAll()
+
                         // Catalogo: leitura aberta, escrita so para ADMIN. A ordem
                         // importa — o matcher mais especifico (GET) vem antes do
                         // geral, senao o geral engoliria as leituras publicas.

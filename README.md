@@ -4,7 +4,7 @@ API REST de pedidos com pagamento por gateway externo, construída em Java 21 co
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
 
-> **Status:** em construção — Etapa 6 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 7 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -136,6 +136,41 @@ O corpo de erro do Stripe vai para o log, **não** para a resposta: ele pode con
 | `Idempotency-Key` enviada ao Stripe | nossa requisição ter chegado lá e a resposta ter se perdido |
 
 Não é redundância: cada uma cobre um lugar diferente — a nossa memória, a nossa tabela e a memória do gateway. A terceira é a única que resolve o caso mais perverso, o de o cliente já ter sido cobrado sem que a gente saiba.
+
+### A assinatura é calculada sobre os bytes crus
+
+O corpo do webhook chega ao controller como `String`, não como objeto. A assinatura HMAC vale sobre os bytes exatos recebidos: deixar o Spring desserializar e serializar de novo para conferir mudaria espaços e ordem de campos, e a assinatura deixaria de bater por um motivo invisível olhando o JSON. Há um teste que prova isso — o mesmo JSON com espaçamento diferente é recusado.
+
+### Comparação de assinatura em tempo constante
+
+`MessageDigest.isEqual`, não `String.equals`. Um `equals` comum sai no primeiro byte diferente, e o tempo de resposta passa a revelar quantos bytes iniciais estavam certos — o que permite descobrir a assinatura correta byte a byte. É um ataque que parece teórico até alguém automatizá-lo.
+
+### A assinatura tem prazo de validade
+
+Sem a janela de tolerância (5 minutos), uma requisição válida capturada hoje continuaria válida para sempre: bastaria reenviar a mesma mensagem, com a mesma assinatura, para reprocessar o evento. O carimbo de tempo faz parte do conteúdo assinado justamente para não poder ser alterado.
+
+### O 401 do webhook não diz o que falhou
+
+Assinatura ausente, inválida ou vencida produzem a mesma resposta. Quem tem o segredo nunca cai ali; para quem não tem, cada detalhe é uma dica de como chegar mais perto. O motivo real vai para o log, onde serve para depurar configuração.
+
+### `INSERT` do evento e efeito na mesma transação
+
+Esta é a decisão que define a etapa:
+
+```
+BEGIN
+  INSERT INTO eventos_processados (id_externo) VALUES (?)   -- colide na 2ª vez
+  ... pedido → PAGO, estoque baixado ...
+COMMIT
+```
+
+Ou as duas coisas acontecem, ou nenhuma. Não há como o efeito ser aplicado sem o registro, nem o registro existir sem o efeito.
+
+A alternativa comum — consultar *"já processei este evento?"* antes de aplicar — tem uma janela entre a consulta e a gravação. A consulta **também** está lá, mas com outro papel: resolver o caso comum sem provocar erro no banco. Ela não substitui a restrição.
+
+### Erro de processamento devolve erro ao gateway, de propósito
+
+Um webhook que falha **precisa** falhar visivelmente: o gateway reentrega, e é assim que o evento não se perde. Só dois casos respondem 200 apesar de nada acontecer — evento repetido (já processado) e cobrança desconhecida (evento de outro ambiente compartilhando a mesma conta). Nos dois, reenviar não mudaria nada, e um 4xx faria o gateway repetir por horas e depois marcar o endpoint como problemático.
 
 ### Consultar o gateway não confirma o pedido
 
@@ -317,7 +352,7 @@ Banco e broker estão no `compose.yaml` antes de existir qualquer entidade. A al
 | `Pedido` | Cliente, itens, valor total, status e chave de idempotência |
 | `ItemPedido` | Produto, quantidade e preço no momento da compra |
 | `Pagamento` | Pedido, identificador externo do gateway, status e valor cobrado |
-| `EventoProcessado` | Identificadores de eventos já consumidos |
+| `EventoProcessado` | Identificadores de eventos já consumidos — a garantia de idempotência |
 | `OutboxEvento` | Evento pendente de publicação, com tentativas e data de entrega |
 
 ### Ciclo de vida do pedido
@@ -362,8 +397,7 @@ O que existe até aqui.
 | `POST` | `/api/pedidos/{id}/cancelamento` | dono do pedido ou `ADMIN` |
 | `POST` | `/api/pedidos/{id}/pagamento` | dono do pedido ou `ADMIN` |
 | `GET` | `/api/pedidos/{id}/pagamento` | dono do pedido ou `ADMIN` |
-| `POST` | `/api/pedidos/{id}/pagamento` | dono do pedido ou `ADMIN` |
-| `GET` | `/api/pedidos/{id}/pagamento` | dono do pedido ou `ADMIN` |
+| `POST` | `/api/webhooks/gateway` | público, autenticado por assinatura HMAC |
 | `GET` | `/actuator/health` | público |
 
 Autenticação por token no cabeçalho:
@@ -471,7 +505,7 @@ Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway 
 - [x] **Etapa 4** — Criação de pedido: itens, congelamento de preço, reserva de estoque, `Idempotency-Key`
 - [x] **Etapa 5** — Máquina de estados do pedido, com transições inválidas recusadas pelo domínio
 - [x] **Etapa 6** — Integração com o gateway: criação da cobrança e consulta de status
-- [ ] **Etapa 7** — **Webhook idempotente**: verificação de assinatura, tabela de eventos processados, teste de entrega duplicada
+- [x] **Etapa 7** — **Webhook idempotente**: verificação de assinatura, tabela de eventos processados, teste de entrega duplicada
 - [ ] **Etapa 8** — **Padrão outbox**: tabela, publicação transacional, worker de entrega, teste de falha na publicação
 - [ ] **Etapa 9** — Consumidores dos eventos: baixa de estoque e notificação, ambos idempotentes
 - [ ] **Etapa 10** — Expiração automática de pedidos não pagos e devolução de estoque

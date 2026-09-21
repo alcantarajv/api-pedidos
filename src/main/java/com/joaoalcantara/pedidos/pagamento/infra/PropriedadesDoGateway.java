@@ -27,5 +27,19 @@ public record PropriedadesDoGateway(
         @NotBlank(message = "defina a URL base do gateway") String url,
         @NotBlank(message = "defina a variavel de ambiente STRIPE_API_KEY") String chaveApi,
         @NotNull Duration timeoutDeConexao,
-        @NotNull Duration timeoutDeLeitura) {
+        @NotNull Duration timeoutDeLeitura,
+
+        /*
+         * Segredo do webhook (whsec_... no Stripe). E um segredo diferente da
+         * chave da API, e com finalidade oposta: a chave prova quem somos ao
+         * gateway; este prova que quem chamou o nosso endpoint foi o gateway.
+         * Sem ele, qualquer pessoa com a URL confirmaria pedidos de graca.
+         */
+        @NotBlank(message = "defina a variavel de ambiente STRIPE_WEBHOOK_SECRET") String segredoDoWebhook,
+
+        /*
+         * Quanto tempo uma assinatura continua aceitavel. Sem essa janela, uma
+         * requisicao valida capturada hoje valeria para sempre.
+         */
+        @NotNull Duration toleranciaDoWebhook) {
 }
