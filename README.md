@@ -4,7 +4,7 @@ API REST de pedidos com pagamento por gateway externo, construída em Java 21 co
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
 
-> **Status:** em construção — Etapa 2 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 3 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -165,6 +165,34 @@ Dar entrada em mercadoria e corrigir a descrição de um produto são operaçõe
 
 `reservar` além do disponível lança `EstoqueInsuficienteException` e vira 409: é resultado legítimo, o cliente perdeu a disputa. Já `confirmarVenda` de mais unidades do que foram reservadas lança `IllegalStateException` e **não** tem tradução HTTP, porque não existe requisição capaz de causar isso — se acontecer, é bug, e deve estourar feio em vez de virar uma resposta educada que esconde o problema.
 
+### JWT stateless, com o papel como claim
+
+Token opaco guardado em banco seria mais fácil de revogar, mas custaria uma consulta a cada requisição. O JWT assinado é validado pela assinatura, sem tocar no banco — inclusive o papel, que viaja como claim e dispensa consulta também na autorização. O preço é a revogação: um token roubado vale até expirar, e mudança de papel só surte efeito no próximo login. Por isso a expiração é curta e configurável. Para uma API de pedidos, essa troca se paga; para um sistema em que banir alguém precisa ter efeito imediato, não se pagaria.
+
+### O registro público sempre cria `CLIENTE`
+
+`RegistroRequisicao` não tem campo `papel`. Se tivesse, qualquer pessoa se autopromoveria a administrador do catálogo mandando `"papel":"ADMIN"` no JSON — e essa é, literalmente, uma das falhas mais comuns em API de portfólio. O primeiro `ADMIN` nasce por variável de ambiente no boot (`ADMIN_INICIAL_EMAIL` / `ADMIN_INICIAL_SENHA`), mesmo padrão de Grafana e Keycloak. Sem essas variáveis, nada é criado: o sistema nunca sobe com credencial de administrador conhecida.
+
+### Erro de login é sempre o mesmo, qualquer que seja a causa
+
+E-mail inexistente e senha errada devolvem o mesmo 401 com o mesmo texto. Distinguir os dois transformaria a tela de login num verificador de quais e-mails têm conta aqui — informação que alimenta phishing direcionado.
+
+### 401 e 403 também saem em Problem Details
+
+Erros de segurança acontecem na cadeia de filtros, **antes** de o `@RestControllerAdvice` entrar em cena. Sem um `EscritorDeProblema` dedicado, um 401 sairia como página HTML padrão do container: um cliente que sabe tratar `application/problem+json` receberia HTML justamente no caso de erro.
+
+### O filtro JWT não rejeita nada
+
+Token ausente ou inválido apenas deixa o contexto de segurança vazio; quem decide se aquela rota exigia autenticação é a configuração de rotas. Se o filtro rejeitasse por conta própria, o catálogo público pararia de responder a quem mandasse um token vencido — e o erro sairia fora do padrão da API.
+
+### O papel muda o conteúdo da resposta, não só o acesso
+
+`GET /api/produtos` é público, mas `estoqueReservado` conta ao visitante quantos pedidos pendentes a loja tem — informação comercial que não é dele. A leitura devolve `ProdutoResposta` para qualquer um e `ProdutoAdminResposta` quando o token é de `ADMIN`. As duas implementam uma interface **selada**, então uma terceira visão não aparece por descuido: ela teria que ser declarada explicitamente.
+
+### A aplicação se recusa a subir mal configurada
+
+`PropriedadesJwt` é `@Validated` com `@Size(min = 32)`. Sem `JWT_SECRET`, o boot falha dizendo exatamente qual propriedade está errada, em vez de subir emitindo token assinado com segredo vazio. A anotação `@Validated` é a parte que costuma faltar: sem ela o Spring liga as propriedades e ignora as constraints, que viram decoração.
+
 ### O `docker compose` sobe a infraestrutura desde a primeira etapa
 
 Banco e broker estão no `compose.yaml` antes de existir qualquer entidade. A alternativa — adicionar o RabbitMQ só na etapa em que ele aparece — daria um projeto que funciona na máquina de quem o escreveu e falha na de qualquer outra pessoa, por depender de infraestrutura instalada à mão e não registrada em lugar nenhum.
@@ -175,7 +203,7 @@ Banco e broker estão no `compose.yaml` antes de existir qualquer entidade. A al
 
 | Entidade | Papel |
 |---|---|
-| `Usuario` | Credenciais e papel (`CLIENTE` ou `ADMIN`) |
+| `Usuario` | Credenciais (senha em hash BCrypt) e papel (`CLIENTE` ou `ADMIN`) |
 | `Produto` | Nome, descrição, preço, estoque, ativo |
 | `Pedido` | Cliente, itens, valor total, status, chave de idempotência |
 | `ItemPedido` | Produto, quantidade e preço no momento da compra |
@@ -206,10 +234,13 @@ Transições inválidas são recusadas pelo domínio: um pedido `ENTREGUE` não 
 
 ## API
 
-O que existe até aqui. A coluna de acesso descreve o destino: a autorização propriamente dita entra na Etapa 3, e **hoje todos os endpoints estão abertos**.
+O que existe até aqui.
 
 | Método | Rota | Acesso |
 |---|---|---|
+| `POST` | `/api/auth/registrar` | público (cria sempre `CLIENTE`) |
+| `POST` | `/api/auth/login` | público |
+| `GET` | `/api/auth/eu` | autenticado |
 | `GET` | `/api/produtos` | público |
 | `GET` | `/api/produtos/{id}` | público |
 | `POST` | `/api/produtos` | `ADMIN` |
@@ -217,6 +248,23 @@ O que existe até aqui. A coluna de acesso descreve o destino: a autorização p
 | `PUT` | `/api/produtos/{id}/estoque` | `ADMIN` |
 | `PUT` | `/api/produtos/{id}/situacao` | `ADMIN` |
 | `GET` | `/actuator/health` | público |
+
+Autenticação por token no cabeçalho:
+
+```http
+Authorization: Bearer <token>
+```
+
+A mesma leitura muda conforme quem pergunta — sem token, `estoqueReservado` e `estoqueTotal` não aparecem:
+
+```jsonc
+// GET /api/produtos/2            (público)
+{"id":2,"nome":"Mouse Gamer","preco":199.90,"estoqueDisponivel":8,"ativo":true}
+
+// GET /api/produtos/2            (token de ADMIN)
+{"id":2,"nome":"Mouse Gamer","preco":199.90,"estoqueDisponivel":8,
+ "estoqueReservado":0,"estoqueTotal":8,"ativo":true}
+```
 
 Erros saem em Problem Details (RFC 9457):
 
@@ -247,6 +295,8 @@ docker compose up -d
 ```
 
 A aplicação sobe em <http://localhost:8080> e o painel do RabbitMQ em <http://localhost:15672> (usuário e senha `pedidos`).
+
+O `.env` precisa de um `JWT_SECRET` com pelo menos 32 caracteres — sem ele a aplicação **recusa subir**, dizendo qual propriedade falta. Defina também `ADMIN_INICIAL_EMAIL` e `ADMIN_INICIAL_SENHA` no primeiro boot: o registro público só cria `CLIENTE`, então esse é o único caminho para o primeiro administrador.
 
 ```bash
 curl http://localhost:8080/actuator/health
@@ -285,7 +335,7 @@ Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway 
 - [x] **Etapa 0** — Repositório: README, `.gitignore`, primeiro commit
 - [x] **Etapa 1** — Scaffold Spring Boot + Docker Compose com PostgreSQL e RabbitMQ
 - [x] **Etapa 2** — Catálogo: `Produto`, migrations, CRUD administrativo, controle de estoque
-- [ ] **Etapa 3** — Autenticação: `Usuario`, Spring Security, JWT, papéis `CLIENTE` e `ADMIN`
+- [x] **Etapa 3** — Autenticação: `Usuario`, Spring Security, JWT, papéis `CLIENTE` e `ADMIN`
 - [ ] **Etapa 4** — Criação de pedido: itens, congelamento de preço, reserva de estoque, `Idempotency-Key`
 - [ ] **Etapa 5** — Máquina de estados do pedido, com transições inválidas recusadas pelo domínio
 - [ ] **Etapa 6** — Integração com o gateway: criação da cobrança e consulta de status

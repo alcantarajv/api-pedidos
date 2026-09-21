@@ -9,11 +9,8 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 
-import com.joaoalcantara.pedidos.comum.PostgresDeTeste;
-import com.joaoalcantara.pedidos.comum.RabbitDeTeste;
+import com.joaoalcantara.pedidos.comum.TesteDeIntegracao;
 
 /**
  * Prova que o scaffold sobe de pe: contexto carregado, banco conectado e broker
@@ -27,8 +24,8 @@ import com.joaoalcantara.pedidos.comum.RabbitDeTeste;
  * <p>Sufixo {@code IT}: roda no {@code mvnw verify} pelo failsafe, e exige
  * Docker. O {@code mvnw test} continua rapido, so com os unitarios.</p>
  */
-@SpringBootTest
-@Import({PostgresDeTeste.class, RabbitDeTeste.class})
+@TesteDeIntegracao
+
 class ContextoDaAplicacaoIT {
 
     @Autowired

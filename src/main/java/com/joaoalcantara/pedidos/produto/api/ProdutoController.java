@@ -4,6 +4,7 @@ import java.net.URI;
 import java.util.List;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -15,16 +16,21 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.joaoalcantara.pedidos.produto.aplicacao.ProdutoServico;
 import com.joaoalcantara.pedidos.produto.dominio.Produto;
+import com.joaoalcantara.pedidos.seguranca.UsuarioAutenticado;
 
 import jakarta.validation.Valid;
 
 /**
  * Endpoints do catalogo.
  *
- * <p><b>Atencao:</b> nesta etapa a escrita ainda esta aberta — o Spring Security
- * so entra na Etapa 3, quando leitura vira publica e escrita passa a exigir
- * ADMIN. A autorizacao sera declarada por padrao de rota na configuracao de
- * seguranca, para ficar num lugar so e ser auditavel de relance.</p>
+ * <p>Leitura e publica; escrita exige ADMIN. A autorizacao propriamente dita e
+ * declarada por padrao de rota em {@code SegurancaConfig}, num lugar so — o
+ * controller nao repete essa decisao.</p>
+ *
+ * <p>Nas leituras o papel muda o <b>conteudo</b> da resposta, e nao o acesso:
+ * quem nao for ADMIN recebe a visao publica, sem as parcelas internas do
+ * estoque. Por isso o principal e injetado aqui, ainda que a rota seja aberta —
+ * ele vem nulo para visitante anonimo.</p>
  */
 @RestController
 @RequestMapping("/api/produtos")
@@ -37,37 +43,40 @@ public class ProdutoController {
     }
 
     @GetMapping
-    public List<ProdutoResposta> listar(@RequestParam(defaultValue = "true") boolean apenasAtivos) {
-        return servico.listar(apenasAtivos).stream().map(ProdutoResposta::de).toList();
+    public List<ProdutoVisao> listar(@RequestParam(defaultValue = "true") boolean apenasAtivos,
+                                     @AuthenticationPrincipal UsuarioAutenticado autenticado) {
+        return servico.listar(apenasAtivos).stream()
+                .map(produto -> visaoPara(produto, autenticado))
+                .toList();
     }
 
     @GetMapping("/{id}")
-    public ProdutoResposta buscar(@PathVariable Long id) {
-        return ProdutoResposta.de(servico.buscar(id));
+    public ProdutoVisao buscar(@PathVariable Long id,
+                               @AuthenticationPrincipal UsuarioAutenticado autenticado) {
+        return visaoPara(servico.buscar(id), autenticado);
     }
 
     @PostMapping
-    public ResponseEntity<ProdutoResposta> criar(@Valid @RequestBody ProdutoRequisicao requisicao) {
+    public ResponseEntity<ProdutoAdminResposta> criar(@Valid @RequestBody ProdutoRequisicao requisicao) {
         Produto produto = servico.criar(requisicao);
         return ResponseEntity
                 .created(URI.create("/api/produtos/" + produto.getId()))
-                .body(ProdutoResposta.de(produto));
+                .body(ProdutoAdminResposta.de(produto));
     }
 
     @PutMapping("/{id}")
-    public ProdutoResposta atualizar(@PathVariable Long id, @Valid @RequestBody ProdutoRequisicao requisicao) {
-        return ProdutoResposta.de(servico.atualizar(id, requisicao));
+    public ProdutoAdminResposta atualizar(@PathVariable Long id, @Valid @RequestBody ProdutoRequisicao requisicao) {
+        return ProdutoAdminResposta.de(servico.atualizar(id, requisicao));
     }
 
     /**
      * Ajuste de estoque em endpoint proprio, e nao como campo do PUT: entrada de
      * mercadoria e correcao de cadastro sao operacoes diferentes, feitas em
-     * momentos diferentes e — quando houver autorizacao — possivelmente por
-     * pessoas diferentes.
+     * momentos diferentes e possivelmente por pessoas diferentes.
      */
     @PutMapping("/{id}/estoque")
-    public ProdutoResposta ajustarEstoque(@PathVariable Long id, @Valid @RequestBody EstoqueRequisicao requisicao) {
-        return ProdutoResposta.de(servico.ajustarEstoque(id, requisicao.estoqueDisponivel()));
+    public ProdutoAdminResposta ajustarEstoque(@PathVariable Long id, @Valid @RequestBody EstoqueRequisicao requisicao) {
+        return ProdutoAdminResposta.de(servico.ajustarEstoque(id, requisicao.estoqueDisponivel()));
     }
 
     /**
@@ -76,7 +85,12 @@ public class ProdutoController {
      * de um atributo qualquer.
      */
     @PutMapping("/{id}/situacao")
-    public ProdutoResposta alterarSituacao(@PathVariable Long id, @Valid @RequestBody SituacaoRequisicao requisicao) {
-        return ProdutoResposta.de(servico.alterarSituacao(id, requisicao.ativo()));
+    public ProdutoAdminResposta alterarSituacao(@PathVariable Long id, @Valid @RequestBody SituacaoRequisicao requisicao) {
+        return ProdutoAdminResposta.de(servico.alterarSituacao(id, requisicao.ativo()));
+    }
+
+    private ProdutoVisao visaoPara(Produto produto, UsuarioAutenticado autenticado) {
+        boolean admin = autenticado != null && autenticado.ehAdmin();
+        return admin ? ProdutoAdminResposta.de(produto) : ProdutoResposta.de(produto);
     }
 }

@@ -9,6 +9,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -40,6 +41,19 @@ public class ManipuladorGlobalDeErros extends ResponseEntityExceptionHandler {
     @ExceptionHandler(ConflitoException.class)
     public ProblemDetail trataConflito(ConflitoException e) {
         return problema(HttpStatus.CONFLICT, e.codigo(), "Conflito", e.getMessage());
+    }
+
+    /**
+     * Login com e-mail ou senha errados: 401, sem revelar qual dos dois falhou.
+     *
+     * <p>A mensagem e fixa de proposito. "Usuario nao encontrado" contra "senha
+     * incorreta" transformaria a tela de login num verificador de quais e-mails
+     * tem conta aqui.</p>
+     */
+    @ExceptionHandler(BadCredentialsException.class)
+    public ProblemDetail trataCredenciaisInvalidas(BadCredentialsException e) {
+        return problema(HttpStatus.UNAUTHORIZED, "credenciais-invalidas",
+                "Credenciais invalidas", "E-mail ou senha incorretos");
     }
 
     /** Falhas de Bean Validation nos DTOs de entrada: 400 com a lista de campos. */

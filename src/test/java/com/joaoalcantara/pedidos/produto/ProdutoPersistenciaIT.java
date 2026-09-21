@@ -8,13 +8,12 @@ import java.math.BigDecimal;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
+
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import com.joaoalcantara.pedidos.comum.PostgresDeTeste;
-import com.joaoalcantara.pedidos.comum.RabbitDeTeste;
+import com.joaoalcantara.pedidos.comum.TesteDeIntegracao;
+
 import com.joaoalcantara.pedidos.produto.dominio.Produto;
 import com.joaoalcantara.pedidos.produto.dominio.ProdutoRepositorio;
 
@@ -26,8 +25,8 @@ import com.joaoalcantara.pedidos.produto.dominio.ProdutoRepositorio;
  * {@code ddl-auto=validate}, uma coluna com nome ou tipo diferente do mapeado
  * impede o contexto de carregar.</p>
  */
-@SpringBootTest
-@Import({PostgresDeTeste.class, RabbitDeTeste.class})
+@TesteDeIntegracao
+
 class ProdutoPersistenciaIT {
 
     @Autowired
