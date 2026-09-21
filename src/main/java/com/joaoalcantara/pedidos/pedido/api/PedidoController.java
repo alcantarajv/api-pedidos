@@ -77,6 +77,20 @@ public class PedidoController {
     }
 
     /**
+     * Cancela o pedido e devolve o estoque reservado.
+     *
+     * <p>{@code POST /cancelamento} em vez de {@code DELETE /{id}}: cancelar nao
+     * apaga o pedido, cria um fato novo na historia dele. O registro continua
+     * existindo — e precisa continuar, porque pedido cancelado e informacao
+     * contabil, nao lixo.</p>
+     */
+    @PostMapping("/{id}/cancelamento")
+    public PedidoResposta cancelar(@PathVariable Long id,
+                                   @AuthenticationPrincipal UsuarioAutenticado autenticado) {
+        return PedidoResposta.de(servico.cancelar(autenticado, id));
+    }
+
+    /**
      * A chave e validada aqui, e nao por Bean Validation, porque cabecalho nao
      * passa pelo {@code @Valid} do corpo. Erro de cabecalho ausente vira 422 com
      * um {@code type} estavel, como qualquer outra regra.

@@ -18,10 +18,12 @@ public class PedidoServico {
 
     private final PedidoRepositorio pedidos;
     private final CriadorDePedido criador;
+    private final CanceladorDePedido cancelador;
 
-    public PedidoServico(PedidoRepositorio pedidos, CriadorDePedido criador) {
+    public PedidoServico(PedidoRepositorio pedidos, CriadorDePedido criador, CanceladorDePedido cancelador) {
         this.pedidos = pedidos;
         this.criador = criador;
+        this.cancelador = cancelador;
     }
 
     /**
@@ -66,6 +68,20 @@ public class PedidoServico {
                     .orElseThrow(() -> e);
             return ResultadoDeCriacao.jaExistia(carregarComItens(vencedor.getId()));
         }
+    }
+
+    /**
+     * Cancela o pedido, devolvendo o estoque reservado.
+     *
+     * <p>Quem pode cancelar: o dono do pedido ou um ADMIN. A checagem reusa
+     * {@link #buscar} — e por isso um cliente que tenta cancelar o pedido de
+     * outro recebe 404, e nao 403: responder 403 confirmaria que aquele pedido
+     * existe.</p>
+     */
+    public Pedido cancelar(UsuarioAutenticado autenticado, Long id) {
+        buscar(autenticado, id);
+        cancelador.cancelar(id);
+        return carregarComItens(id);
     }
 
     @Transactional(readOnly = true)

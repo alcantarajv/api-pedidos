@@ -14,6 +14,16 @@ public interface PedidoRepositorio {
     Optional<Pedido> porIdComItens(Long id);
 
     /**
+     * Carrega o pedido travando a linha ate o fim da transacao.
+     *
+     * <p>Uma transicao de estado e um ler-decidir-gravar: sem serializacao, duas
+     * requisicoes simultaneas leem o mesmo estado de origem e as duas se acham
+     * autorizadas a seguir. A trava transforma a disputa em fila, e a segunda
+     * requisicao ve o estado ja alterado.</p>
+     */
+    Optional<Pedido> porIdComTrava(Long id);
+
+    /**
      * Busca o pedido que ja foi criado com aquela chave, para aquele usuario.
      *
      * <p>E o que transforma um reenvio em consulta: mesma chave, mesmo pedido,

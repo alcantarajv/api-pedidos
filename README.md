@@ -4,7 +4,7 @@ API REST de pedidos com pagamento por gateway externo, construída em Java 21 co
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
 
-> **Status:** em construção — Etapa 4 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 5 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -111,7 +111,23 @@ Ambiente de testes sem burocracia, documentação boa e uma CLI (`stripe listen`
 
 ### A máquina de estados vive na entidade
 
-`pedido.marcarComoPago()` recusa a transição se o estado atual não permite. A regra não fica no controller nem no serviço: qualquer caminho que chegue à entidade — REST, consumidor de fila, job de expiração — precisa obedecer à mesma restrição, e só a entidade está em todos esses caminhos.
+`pedido.marcarComoPago()` recusa a transição se o estado atual não permite. A regra não fica no controller nem no serviço: qualquer caminho que chegue à entidade — REST, consumidor de fila, job de expiração — precisa obedecer à mesma restrição, e só a entidade está em todos esses caminhos. Uma validação no controller protegeria apenas a porta da frente.
+
+O grafo de transições é declarado no próprio `StatusPedido`, num `switch` que devolve os destinos possíveis de cada estado. Quem lê o enum vê o ciclo de vida inteiro numa tela, e acrescentar um estado obriga a declarar de onde se chega nele.
+
+**Detalhe de linguagem:** os conjuntos vêm de um `switch`, e não de um campo preenchido no construtor, porque uma constante de enum não pode referenciar outra enquanto as constantes ainda estão sendo criadas — a versão com campo compila e estoura `NullPointerException` na inicialização da classe.
+
+### Não existe caminho administrativo para `PAGO`
+
+Quem decide que um pedido está pago é o gateway, pelo webhook da Etapa 7. Um endpoint que marcasse "pago" na mão tornaria opcional a única prova de que o dinheiro entrou — e o que é opcional acaba sendo usado para contornar o fluxo real. Como consequência, hoje o único trecho do grafo alcançável pela API é `AGUARDANDO_PAGAMENTO → CANCELADO`; o resto está coberto por teste de unidade e passa a ser alcançável quando o pagamento existir.
+
+### Cancelar é `POST /cancelamento`, não `DELETE /{id}`
+
+Cancelar não apaga o pedido: cria um fato novo na história dele. O registro continua existindo — e precisa continuar, porque pedido cancelado é informação contábil, não lixo. O verbo `DELETE` sugeriria o contrário a quem lê só a rota.
+
+### A transição é validada antes de qualquer efeito colateral
+
+No cancelamento, `pedido.cancelar()` roda **antes** da devolução do estoque. Um pedido já cancelado para na validação e o estoque não volta uma segunda vez. A ordem inversa — devolver e depois validar — funcionaria no caminho feliz e criaria estoque do nada no caminho repetido.
 
 ### O `Clock` é um bean injetado
 
@@ -136,6 +152,12 @@ O Surefire roda `*Test` (unitários, sem dependência externa) e o Failsafe roda
 ### PostgreSQL e RabbitMQ de verdade nos testes
 
 Os testes de integração sobem os dois em contêiner com Testcontainers, com `@ServiceConnection` injetando as credenciais no Spring. Não há substituto em memória honesto para nenhum dos dois neste projeto: a idempotência depende do erro de unicidade específico do PostgreSQL, e o outbox depende de um broker que pode mesmo falhar.
+
+### Travar o pedido antes de mudar seu estado
+
+Uma transição é um *ler → decidir → gravar*: sem serialização, duas requisições simultâneas leem o mesmo estado de origem e ambas se acham autorizadas a seguir. O cancelamento carrega o pedido com `SELECT ... FOR UPDATE`, e a segunda requisição enxerga o estado já alterado.
+
+Uma observação honesta sobre essa trava: **hoje ela não é o que salva o estoque.** Removendo-a, o teste de cancelamento concorrente continua passando — a devolução trava a linha do *produto*, e `devolverReserva` recusa devolver mais do que está reservado. Ou seja, o efeito colateral desta transição tem guarda própria. A trava existe porque isso é sorte desta transição específica: uma que apenas publicasse um evento (Etapa 8) aconteceria duas vezes sem ela. A garantia precisa valer para qualquer transição, não só para as que se defendem sozinhas.
 
 ### Estoque em duas parcelas: disponível e reservado
 
@@ -293,6 +315,7 @@ O que existe até aqui.
 | `POST` | `/api/pedidos` | autenticado (exige `Idempotency-Key`) |
 | `GET` | `/api/pedidos` | autenticado (cliente vê os seus; admin vê todos) |
 | `GET` | `/api/pedidos/{id}` | autenticado |
+| `POST` | `/api/pedidos/{id}/cancelamento` | dono do pedido ou `ADMIN` |
 | `GET` | `/actuator/health` | público |
 
 Autenticação por token no cabeçalho:
@@ -398,7 +421,7 @@ Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway 
 - [x] **Etapa 2** — Catálogo: `Produto`, migrations, CRUD administrativo, controle de estoque
 - [x] **Etapa 3** — Autenticação: `Usuario`, Spring Security, JWT, papéis `CLIENTE` e `ADMIN`
 - [x] **Etapa 4** — Criação de pedido: itens, congelamento de preço, reserva de estoque, `Idempotency-Key`
-- [ ] **Etapa 5** — Máquina de estados do pedido, com transições inválidas recusadas pelo domínio
+- [x] **Etapa 5** — Máquina de estados do pedido, com transições inválidas recusadas pelo domínio
 - [ ] **Etapa 6** — Integração com o gateway: criação da cobrança e consulta de status
 - [ ] **Etapa 7** — **Webhook idempotente**: verificação de assinatura, tabela de eventos processados, teste de entrega duplicada
 - [ ] **Etapa 8** — **Padrão outbox**: tabela, publicação transacional, worker de entrega, teste de falha na publicação

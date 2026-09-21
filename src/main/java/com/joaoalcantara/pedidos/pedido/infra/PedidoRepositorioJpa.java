@@ -34,6 +34,11 @@ class PedidoRepositorioJpa implements PedidoRepositorio {
     }
 
     @Override
+    public Optional<Pedido> porIdComTrava(Long id) {
+        return jpa.buscarComTrava(id);
+    }
+
+    @Override
     public Optional<Pedido> porChaveDeIdempotencia(Long usuarioId, String chave) {
         return jpa.findByUsuario_IdAndChaveIdempotencia(usuarioId, chave);
     }

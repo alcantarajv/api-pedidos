@@ -91,10 +91,66 @@ public class Pedido {
      * cuida do que e o pedido; o servico, de como ele conversa com o resto.</p>
      */
     public ItemPedido adicionarItem(Produto produto, int quantidade) {
+        if (status != StatusPedido.AGUARDANDO_PAGAMENTO) {
+            throw new IllegalStateException(
+                    "Pedido %s nao aceita novos itens".formatted(status));
+        }
         ItemPedido item = new ItemPedido(this, produto, quantidade);
         itens.add(item);
         recalcularTotal();
         return item;
+    }
+
+    /**
+     * Pagamento aprovado pelo gateway.
+     *
+     * <p>Nao existe caminho administrativo para este estado, e isso e
+     * deliberado: quem decide que um pedido esta pago e o gateway, pelo webhook
+     * da Etapa 7. Um endpoint que marcasse "pago" na mao tornaria opcional a
+     * unica prova de que o dinheiro entrou.</p>
+     */
+    public void marcarComoPago() {
+        transicionarPara(StatusPedido.PAGO);
+    }
+
+    public void iniciarSeparacao() {
+        transicionarPara(StatusPedido.SEPARANDO);
+    }
+
+    public void marcarComoEnviado() {
+        transicionarPara(StatusPedido.ENVIADO);
+    }
+
+    public void marcarComoEntregue() {
+        transicionarPara(StatusPedido.ENTREGUE);
+    }
+
+    public void cancelar() {
+        transicionarPara(StatusPedido.CANCELADO);
+    }
+
+    public void reembolsar() {
+        transicionarPara(StatusPedido.REEMBOLSADO);
+    }
+
+    /**
+     * Unico ponto por onde o status muda.
+     *
+     * <p>A regra mora na entidade, e nao no servico ou no controller, porque a
+     * entidade e o unico lugar por onde <b>todos</b> os caminhos passam: a API
+     * REST, o webhook do gateway, o consumidor da fila e o job de expiracao. Uma
+     * validacao no controller protegeria so a porta da frente.</p>
+     */
+    private void transicionarPara(StatusPedido destino) {
+        if (!status.permiteIrPara(destino)) {
+            throw new TransicaoInvalidaException(id, status, destino);
+        }
+        this.status = destino;
+    }
+
+    /** O estoque reservado por este pedido ainda esta preso a ele? */
+    public boolean mantemReservaDeEstoque() {
+        return status == StatusPedido.AGUARDANDO_PAGAMENTO;
     }
 
     private void recalcularTotal() {

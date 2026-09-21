@@ -186,6 +186,37 @@ class PedidoConcorrenteIT {
         assertThat(pedidosGravados).isEqualTo(1);
     }
 
+    @Test
+    @DisplayName("N cancelamentos simultaneos do mesmo pedido devolvem o estoque uma unica vez")
+    void cancelamentoConcorrenteDevolveUmaVez() throws InterruptedException {
+        Usuario cliente = novoCliente(0);
+        Produto produto = produtos.salvar(new Produto("Item", "d", new BigDecimal("100.00"), 10));
+        var criado = pedidoServico.criar(autenticado(cliente), UUID.randomUUID().toString(),
+                pedidoDe(produto.getId(), 4));
+        Long pedidoId = criado.pedido().getId();
+
+        AtomicInteger cancelamentos = new AtomicInteger();
+        AtomicInteger recusados = new AtomicInteger();
+
+        emParalelo(THREADS, indice -> {
+            try {
+                pedidoServico.cancelar(autenticado(cliente), pedidoId);
+                cancelamentos.incrementAndGet();
+            } catch (Throwable e) {
+                recusados.incrementAndGet();
+            }
+        });
+
+        assertThat(cancelamentos.get()).as("so um cancelamento vale").isEqualTo(1);
+        assertThat(recusados.get()).isEqualTo(THREADS - 1);
+
+        Produto depois = produtos.porId(produto.getId()).orElseThrow();
+        assertThat(depois.getEstoqueDisponivel())
+                .as("o estoque volta exatamente uma vez, nao uma por thread")
+                .isEqualTo(10);
+        assertThat(depois.getEstoqueReservado()).isZero();
+    }
+
     /**
      * A excecao pode chegar embrulhada por camadas do Spring. Procurar na cadeia
      * de causas evita um teste fragil que depende do embrulho exato.
