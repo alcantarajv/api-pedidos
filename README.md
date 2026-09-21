@@ -4,7 +4,7 @@ API REST de pedidos com pagamento por gateway externo, construída em Java 21 co
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
 
-> **Status:** em construção — Etapa 1 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 2 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -16,6 +16,7 @@ O que este projeto resolve não é o CRUD de produtos — é o que acontece quan
 - [Decisões técnicas](#decisões-técnicas)
 - [Modelo de domínio](#modelo-de-domínio)
 - [Regras de negócio](#regras-de-negócio)
+- [API](#api)
 - [Como rodar](#como-rodar)
 - [Stack](#stack)
 - [Roadmap](#roadmap)
@@ -136,6 +137,34 @@ O Surefire roda `*Test` (unitários, sem dependência externa) e o Failsafe roda
 
 Os testes de integração sobem os dois em contêiner com Testcontainers, com `@ServiceConnection` injetando as credenciais no Spring. Não há substituto em memória honesto para nenhum dos dois neste projeto: a idempotência depende do erro de unicidade específico do PostgreSQL, e o outbox depende de um broker que pode mesmo falhar.
 
+### Estoque em duas parcelas: disponível e reservado
+
+`Produto` guarda `estoque_disponivel` (pode ser prometido a um pedido novo) e `estoque_reservado` (já prometido a um pedido aguardando pagamento). A soma é o que existe no depósito. Cada passo do ciclo vira um movimento entre as parcelas:
+
+| Momento | Movimento |
+|---|---|
+| Criação do pedido | disponível → reservado |
+| Pagamento aprovado | reservado → saiu |
+| Cancelamento ou expiração | reservado → disponível |
+
+Um contador único também funcionaria e seria mais simples, mas perderia informação: com ele não dá para responder *"quantas unidades estão presas em pedidos que ainda podem expirar?"* — que é exatamente o que decide se é hora de repor estoque. A separação também dá significado ao passo do pagamento, que com um contador só seria uma operação que não faz nada.
+
+### O banco recusa estoque negativo, não só a aplicação
+
+As colunas de estoque têm `CHECK (... >= 0)`. A entidade já valida antes de reservar, mas entre a validação e a gravação existe uma janela em que outra transação pode levar a mesma unidade — o mesmo tipo de janela que o projeto anterior enfrentou com horários. A checagem em Java evita o caso comum e produz uma mensagem decente; a constraint garante que, no pior caso, a transação perdedora morra no banco em vez de gravar estoque negativo. Há um teste que tenta gravar `-1` por SQL direto, por fora da entidade, e verifica que o banco recusa.
+
+### Ajuste de estoque é a quantidade final, não um delta
+
+`PUT /api/produtos/{id}/estoque` recebe `{"estoqueDisponivel": 25}`, não `{"ajuste": "+10"}`. O delta parece mais natural para quem dá entrada em mercadoria, mas não é idempotente: reenviar depois de um timeout soma de novo. Com a quantidade final, repetir a chamada leva ao mesmo estado. É o raciocínio da `Idempotency-Key` da Etapa 4 aplicado ao caso mais simples — e a razão de estar aqui, em vez de um campo no `PUT` do produto.
+
+### Estoque e situação têm endpoint próprio
+
+Dar entrada em mercadoria e corrigir a descrição de um produto são operações diferentes, feitas em momentos diferentes e — a partir da Etapa 3 — possivelmente por pessoas diferentes. Se estoque fosse um campo do `PUT`, uma correção de preço montada às pressas poderia desfazer uma entrada de mercadoria por descuido no JSON. Desativar o produto também é transição de estado com significado próprio ("pare de aceitar pedidos"), não edição de atributo.
+
+### `IllegalStateException` para defeito, exceção de domínio para negócio
+
+`reservar` além do disponível lança `EstoqueInsuficienteException` e vira 409: é resultado legítimo, o cliente perdeu a disputa. Já `confirmarVenda` de mais unidades do que foram reservadas lança `IllegalStateException` e **não** tem tradução HTTP, porque não existe requisição capaz de causar isso — se acontecer, é bug, e deve estourar feio em vez de virar uma resposta educada que esconde o problema.
+
 ### O `docker compose` sobe a infraestrutura desde a primeira etapa
 
 Banco e broker estão no `compose.yaml` antes de existir qualquer entidade. A alternativa — adicionar o RabbitMQ só na etapa em que ele aparece — daria um projeto que funciona na máquina de quem o escreveu e falha na de qualquer outra pessoa, por depender de infraestrutura instalada à mão e não registrada em lugar nenhum.
@@ -172,6 +201,38 @@ Transições inválidas são recusadas pelo domínio: um pedido `ENTREGUE` não 
 - O preço do item é congelado na criação do pedido
 - Um `CLIENTE` só enxerga os próprios pedidos; um `ADMIN` gerencia produtos e vê todos
 - Webhook só é aceito com assinatura válida
+
+---
+
+## API
+
+O que existe até aqui. A coluna de acesso descreve o destino: a autorização propriamente dita entra na Etapa 3, e **hoje todos os endpoints estão abertos**.
+
+| Método | Rota | Acesso |
+|---|---|---|
+| `GET` | `/api/produtos` | público |
+| `GET` | `/api/produtos/{id}` | público |
+| `POST` | `/api/produtos` | `ADMIN` |
+| `PUT` | `/api/produtos/{id}` | `ADMIN` |
+| `PUT` | `/api/produtos/{id}/estoque` | `ADMIN` |
+| `PUT` | `/api/produtos/{id}/situacao` | `ADMIN` |
+| `GET` | `/actuator/health` | público |
+
+Erros saem em Problem Details (RFC 9457):
+
+```http
+HTTP/1.1 409 Conflict
+Content-Type: application/problem+json
+
+{
+  "type": "https://api.pedidos.dev/erros/produto-duplicado",
+  "title": "Conflito",
+  "status": 409,
+  "detail": "Ja existe um produto chamado 'teclado mecanico'",
+  "instance": "/api/produtos",
+  "ocorridoEm": "2026-09-21T18:31:39.618371500Z"
+}
+```
 
 ---
 
@@ -223,7 +284,7 @@ Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway 
 
 - [x] **Etapa 0** — Repositório: README, `.gitignore`, primeiro commit
 - [x] **Etapa 1** — Scaffold Spring Boot + Docker Compose com PostgreSQL e RabbitMQ
-- [ ] **Etapa 2** — Catálogo: `Produto`, migrations, CRUD administrativo, controle de estoque
+- [x] **Etapa 2** — Catálogo: `Produto`, migrations, CRUD administrativo, controle de estoque
 - [ ] **Etapa 3** — Autenticação: `Usuario`, Spring Security, JWT, papéis `CLIENTE` e `ADMIN`
 - [ ] **Etapa 4** — Criação de pedido: itens, congelamento de preço, reserva de estoque, `Idempotency-Key`
 - [ ] **Etapa 5** — Máquina de estados do pedido, com transições inválidas recusadas pelo domínio
