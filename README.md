@@ -4,7 +4,7 @@ API REST de pedidos com pagamento por gateway externo, construída em Java 21 co
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
 
-> **Status:** em construção — Etapa 3 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 4 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -193,6 +193,49 @@ Token ausente ou inválido apenas deixa o contexto de segurança vazio; quem dec
 
 `PropriedadesJwt` é `@Validated` com `@Size(min = 32)`. Sem `JWT_SECRET`, o boot falha dizendo exatamente qual propriedade está errada, em vez de subir emitindo token assinado com segredo vazio. A anotação `@Validated` é a parte que costuma faltar: sem ela o Spring liga as propriedades e ignora as constraints, que viram decoração.
 
+### `Idempotency-Key` é obrigatório na criação de pedido
+
+O Stripe trata o cabeçalho como opcional. Aqui ele é exigido, e a requisição sem ele é recusada com 422. O motivo: criar pedido é a operação mais cara de duplicar neste sistema — o cliente fica com duas cobranças e o estoque sai em dobro. Exigir a chave transfere ao cliente uma decisão trivial (gerar um UUID) e elimina a classe inteira de problemas. Reenviar a mesma chave devolve **200** com o pedido de antes, em vez de 201: o corpo é idêntico, e o status conta o que de fato aconteceu.
+
+### A chave de idempotência é única por usuário, não globalmente
+
+`UNIQUE (usuario_id, chave_idempotencia)`. Se o índice fosse global, mandar a chave de outra pessoa devolveria **o pedido dela** — um vazamento criado justamente pelo mecanismo que deveria proteger. Dois clientes diferentes podem usar a string `"pedido-1"` sem interferir um no outro.
+
+### Consulta prévia **e** índice único, não um ou outro
+
+A aplicação consulta a chave antes de criar, e o banco tem índice único sobre ela. Parece redundante, e não é:
+
+- A **consulta** resolve o caso comum — o cliente reenviou minutos depois — sem provocar erro no banco.
+- O **índice único** fecha a janela entre consultar e gravar. Duas requisições simultâneas passam as duas pela consulta sem achar nada; é o índice que derruba a segunda.
+
+Quando isso acontece, a aplicação lê o pedido que a primeira criou e o devolve — reenvio concorrente não é erro do cliente. Há um teste com 12 threads e a mesma chave: todas recebem o mesmo `id`, e o banco fica com exatamente um pedido e uma única reserva de estoque.
+
+### O tratamento do conflito vive fora da transação que falhou
+
+Quando o índice único é violado, a transação corrente fica marcada para rollback e o PostgreSQL recusa qualquer comando seguinte nela (`current transaction is aborted`). Ler o pedido vencedor exige uma transação **nova**, e só há transação nova depois que a anterior terminou. Por isso a criação está em `CriadorDePedido` (`@Transactional`) e o `try/catch` fica em `PedidoServico`, fora dela.
+
+Fazer o `catch` dentro do mesmo método `@Transactional` é a armadilha clássica: parece funcionar, passa em teste com banco em memória, e falha no PostgreSQL.
+
+### Reserva de estoque com `SELECT ... FOR UPDATE`
+
+Ler "há 1 unidade" e gravar "agora há 0" tem uma janela no meio. O `@Lock(PESSIMISTIC_WRITE)` trava a linha do produto até o fim da transação: a segunda reserva espera a primeira terminar e enxerga o estoque já decrementado. O lock serializa apenas as reservas *daquele produto* — pedidos de produtos diferentes não se esperam.
+
+**Por que não lock otimista (`@Version`):** com uma dezena de clientes disputando o mesmo item, quase toda transação perderia a versão e precisaria ser repetida. Lock otimista serve para conflito raro; disputa por estoque é conflito esperado.
+
+**Por que não confiar só na `CHECK`:** ela impede estoque negativo, mas não impede o erro real. Duas transações lendo `disponivel = 1` gravam as duas `disponivel = 0` — nenhuma viola a constraint, e mesmo assim duas pessoas compraram a mesma unidade. Verifiquei isso na prática: removendo o lock, **8 das 12 threads** levaram a última unidade e o teste falhou. A constraint é rede de segurança contra bug, não o mecanismo.
+
+### Travar os produtos sempre na mesma ordem
+
+Antes de reservar, os itens são ordenados por id de produto. Sem isso, um pedido de `[A, B]` e outro de `[B, A]` travariam os dois em ordens opostas e esperariam um pelo outro — deadlock, que o banco resolve matando uma das transações. Ordem determinística impede o ciclo de se formar.
+
+### O item fotografa o produto, não o referencia para leitura
+
+`ItemPedido` copia nome e preço no momento da compra. A referência ao `Produto` continua — é ela que permite baixar o estoque certo —, mas ela responde *"o que foi comprado"*, não *"quanto custa"*. Sem a cópia, um reajuste no catálogo reescreveria o histórico: o cliente abriria um pedido de março e veria o preço de agosto, e a soma dos itens deixaria de bater com o valor cobrado.
+
+### Itens repetidos são recusados, não somados
+
+Duas linhas para o mesmo produto viram 422. Somar seria conveniente, mas devolveria ao cliente um pedido diferente do que ele enviou — pior do que um erro explícito, porque passa despercebido.
+
 ### O `docker compose` sobe a infraestrutura desde a primeira etapa
 
 Banco e broker estão no `compose.yaml` antes de existir qualquer entidade. A alternativa — adicionar o RabbitMQ só na etapa em que ele aparece — daria um projeto que funciona na máquina de quem o escreveu e falha na de qualquer outra pessoa, por depender de infraestrutura instalada à mão e não registrada em lugar nenhum.
@@ -205,7 +248,7 @@ Banco e broker estão no `compose.yaml` antes de existir qualquer entidade. A al
 |---|---|
 | `Usuario` | Credenciais (senha em hash BCrypt) e papel (`CLIENTE` ou `ADMIN`) |
 | `Produto` | Nome, descrição, preço, estoque, ativo |
-| `Pedido` | Cliente, itens, valor total, status, chave de idempotência |
+| `Pedido` | Cliente, itens, valor total, status e chave de idempotência |
 | `ItemPedido` | Produto, quantidade e preço no momento da compra |
 | `Pagamento` | Pedido, identificador externo do gateway, status, valor |
 | `EventoProcessado` | Identificadores de eventos já consumidos |
@@ -247,12 +290,30 @@ O que existe até aqui.
 | `PUT` | `/api/produtos/{id}` | `ADMIN` |
 | `PUT` | `/api/produtos/{id}/estoque` | `ADMIN` |
 | `PUT` | `/api/produtos/{id}/situacao` | `ADMIN` |
+| `POST` | `/api/pedidos` | autenticado (exige `Idempotency-Key`) |
+| `GET` | `/api/pedidos` | autenticado (cliente vê os seus; admin vê todos) |
+| `GET` | `/api/pedidos/{id}` | autenticado |
 | `GET` | `/actuator/health` | público |
 
 Autenticação por token no cabeçalho:
 
 ```http
 Authorization: Bearer <token>
+```
+
+Criação de pedido — a chave torna o reenvio inofensivo:
+
+```http
+POST /api/pedidos
+Authorization: Bearer <token>
+Idempotency-Key: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+
+{"itens":[{"produtoId":1,"quantidade":3}]}
+```
+
+```
+201 Created   na primeira vez
+200 OK        em qualquer reenvio da mesma chave, com o mesmo pedido no corpo
 ```
 
 A mesma leitura muda conforme quem pergunta — sem token, `estoqueReservado` e `estoqueTotal` não aparecem:
@@ -336,7 +397,7 @@ Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway 
 - [x] **Etapa 1** — Scaffold Spring Boot + Docker Compose com PostgreSQL e RabbitMQ
 - [x] **Etapa 2** — Catálogo: `Produto`, migrations, CRUD administrativo, controle de estoque
 - [x] **Etapa 3** — Autenticação: `Usuario`, Spring Security, JWT, papéis `CLIENTE` e `ADMIN`
-- [ ] **Etapa 4** — Criação de pedido: itens, congelamento de preço, reserva de estoque, `Idempotency-Key`
+- [x] **Etapa 4** — Criação de pedido: itens, congelamento de preço, reserva de estoque, `Idempotency-Key`
 - [ ] **Etapa 5** — Máquina de estados do pedido, com transições inválidas recusadas pelo domínio
 - [ ] **Etapa 6** — Integração com o gateway: criação da cobrança e consulta de status
 - [ ] **Etapa 7** — **Webhook idempotente**: verificação de assinatura, tabela de eventos processados, teste de entrega duplicada

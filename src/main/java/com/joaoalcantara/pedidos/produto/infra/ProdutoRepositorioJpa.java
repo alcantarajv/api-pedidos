@@ -29,6 +29,11 @@ class ProdutoRepositorioJpa implements ProdutoRepositorio {
     }
 
     @Override
+    public Optional<Produto> porIdComTrava(Long id) {
+        return jpa.buscarComTrava(id);
+    }
+
+    @Override
     public List<Produto> listar(boolean apenasAtivos) {
         return apenasAtivos ? jpa.findByAtivoTrueOrderByNomeAsc() : jpa.findAllByOrderByNomeAsc();
     }
