@@ -56,6 +56,20 @@ public class ManipuladorGlobalDeErros extends ResponseEntityExceptionHandler {
                 "Credenciais invalidas", "E-mail ou senha incorretos");
     }
 
+    /**
+     * Falha ao falar com o gateway de pagamento: 502, nao 500.
+     *
+     * <p>A distincao importa para quem consome a API. 500 diz "o defeito e
+     * nosso"; 502 diz "quem falhou foi um sistema de que dependemos". Com a
+     * chave de idempotencia em maos, repetir a chamada e seguro — e e isso que
+     * o cliente precisa saber.</p>
+     */
+    @ExceptionHandler(GatewayIndisponivelException.class)
+    public ProblemDetail trataGatewayIndisponivel(GatewayIndisponivelException e) {
+        return problema(HttpStatus.BAD_GATEWAY, "gateway-indisponivel",
+                "Gateway indisponivel", e.getMessage());
+    }
+
     /** Falhas de Bean Validation nos DTOs de entrada: 400 com a lista de campos. */
     @Override
     protected ResponseEntity<Object> handleMethodArgumentNotValid(

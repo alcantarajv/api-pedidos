@@ -4,7 +4,7 @@ API REST de pedidos com pagamento por gateway externo, construída em Java 21 co
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
 
-> **Status:** em construção — Etapa 5 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 6 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -96,6 +96,50 @@ O projeto precisa de **fila de trabalho** — "processe este evento uma vez" —
 ### Stripe em modo de teste
 
 Ambiente de testes sem burocracia, documentação boa e uma CLI (`stripe listen`) que encaminha webhooks para a máquina local — o que permite desenvolver a parte mais importante do projeto sem expor um endpoint na internet. Alternativa considerada: Mercado Pago, mais reconhecível para recrutador brasileiro, e o plano B caso o sandbox do Stripe crie atrito.
+
+### HTTP direto, sem o SDK do Stripe
+
+O SDK daria modelos tipados e retentativas prontas, mas esconderia justamente o que este projeto quer deixar visível: o corpo form-encoded, o cabeçalho de idempotência, o timeout. São duas chamadas — `POST /v1/payment_intents` e `GET /v1/payment_intents/:id` — e escrevê-las custa menos que carregar uma dependência grande que ninguém nesta base saberia depurar. Num sistema de verdade, com dezenas de recursos do gateway em uso, a conta inverteria.
+
+**Surpresa para quem integra com o Stripe pela primeira vez:** a API é *form-encoded*, não JSON, embora responda JSON.
+
+### O domínio fala com uma porta, não com o Stripe
+
+`GatewayDePagamento` é uma interface no domínio; `GatewayStripe` é o adaptador em `infra`. Trocar de gateway vira escrever outro adaptador, os testes de regra usam um dublê sem rede, e o vocabulário do fornecedor — `payment_intent`, `client_secret`, centavos como inteiro — fica confinado a uma classe.
+
+O mesmo vale para os status: `StatusPagamento` tem nomes nossos. Se `requires_payment_method` entrasse no domínio, cada regra de negócio passaria a depender do vocabulário de um fornecedor.
+
+### Valores em centavos, convertidos sem ponto flutuante
+
+O Stripe cobra na menor unidade da moeda: `R$ 300,00` são `30000`. Mandar `300` cobraria três reais. Como o valor já tem escala 2, o inteiro sem escala do `BigDecimal` **é** o total em centavos — `unscaledValue()`, sem multiplicar por 100 e sem `double` no caminho.
+
+### Timeouts explícitos, porque o padrão é não ter nenhum
+
+Um gateway que aceita a conexão e nunca responde prenderia a thread da requisição indefinidamente. Algumas dessas e o pool do Tomcat acaba: a API inteira para de responder por causa de um fornecedor lento. Conexão em 3s, leitura em 10s, ambos configuráveis.
+
+### Falha do gateway é 502, não 500
+
+500 diz ao cliente "o defeito é nosso, não adianta tentar de novo". 502 diz "quem falhou foi um sistema do qual dependemos". Com a chave de idempotência em mãos, repetir é seguro — e é isso que o cliente precisa saber para decidir o que fazer.
+
+O corpo de erro do Stripe vai para o log, **não** para a resposta: ele pode conter detalhe de configuração da conta, que não é assunto de quem comprou.
+
+### O `client_secret` não é persistido
+
+É credencial de uso único, e guardar credencial que dá para não guardar é dívida de segurança. Quando ele faz falta — numa segunda chamada de cobrança do mesmo pedido —, o gateway o devolve de novo.
+
+### Três camadas de idempotência na cobrança, em três lugares diferentes
+
+| Camada | Protege contra |
+|---|---|
+| Consulta prévia por `pedido_id` | a segunda chamada, minutos depois |
+| `UNIQUE (pedido_id)` na tabela | duas chamadas simultâneas |
+| `Idempotency-Key` enviada ao Stripe | nossa requisição ter chegado lá e a resposta ter se perdido |
+
+Não é redundância: cada uma cobre um lugar diferente — a nossa memória, a nossa tabela e a memória do gateway. A terceira é a única que resolve o caso mais perverso, o de o cliente já ter sido cobrado sem que a gente saiba.
+
+### Consultar o gateway não confirma o pedido
+
+`GET /pagamento` atualiza o status da cobrança, mas **não** leva o pedido a `PAGO`, mesmo quando o gateway diz "aprovado". Essa transição é trabalho exclusivo do webhook (Etapa 7). Ter dois caminhos capazes de confirmar um pedido significaria manter duas implementações corretas da mesma regra — e a segunda, a que ninguém lembra de testar, é a que confirma um pedido duas vezes.
 
 ### Sem Lombok
 
@@ -272,7 +316,7 @@ Banco e broker estão no `compose.yaml` antes de existir qualquer entidade. A al
 | `Produto` | Nome, descrição, preço, estoque, ativo |
 | `Pedido` | Cliente, itens, valor total, status e chave de idempotência |
 | `ItemPedido` | Produto, quantidade e preço no momento da compra |
-| `Pagamento` | Pedido, identificador externo do gateway, status, valor |
+| `Pagamento` | Pedido, identificador externo do gateway, status e valor cobrado |
 | `EventoProcessado` | Identificadores de eventos já consumidos |
 | `OutboxEvento` | Evento pendente de publicação, com tentativas e data de entrega |
 
@@ -316,6 +360,10 @@ O que existe até aqui.
 | `GET` | `/api/pedidos` | autenticado (cliente vê os seus; admin vê todos) |
 | `GET` | `/api/pedidos/{id}` | autenticado |
 | `POST` | `/api/pedidos/{id}/cancelamento` | dono do pedido ou `ADMIN` |
+| `POST` | `/api/pedidos/{id}/pagamento` | dono do pedido ou `ADMIN` |
+| `GET` | `/api/pedidos/{id}/pagamento` | dono do pedido ou `ADMIN` |
+| `POST` | `/api/pedidos/{id}/pagamento` | dono do pedido ou `ADMIN` |
+| `GET` | `/api/pedidos/{id}/pagamento` | dono do pedido ou `ADMIN` |
 | `GET` | `/actuator/health` | público |
 
 Autenticação por token no cabeçalho:
@@ -422,7 +470,7 @@ Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway 
 - [x] **Etapa 3** — Autenticação: `Usuario`, Spring Security, JWT, papéis `CLIENTE` e `ADMIN`
 - [x] **Etapa 4** — Criação de pedido: itens, congelamento de preço, reserva de estoque, `Idempotency-Key`
 - [x] **Etapa 5** — Máquina de estados do pedido, com transições inválidas recusadas pelo domínio
-- [ ] **Etapa 6** — Integração com o gateway: criação da cobrança e consulta de status
+- [x] **Etapa 6** — Integração com o gateway: criação da cobrança e consulta de status
 - [ ] **Etapa 7** — **Webhook idempotente**: verificação de assinatura, tabela de eventos processados, teste de entrega duplicada
 - [ ] **Etapa 8** — **Padrão outbox**: tabela, publicação transacional, worker de entrega, teste de falha na publicação
 - [ ] **Etapa 9** — Consumidores dos eventos: baixa de estoque e notificação, ambos idempotentes
