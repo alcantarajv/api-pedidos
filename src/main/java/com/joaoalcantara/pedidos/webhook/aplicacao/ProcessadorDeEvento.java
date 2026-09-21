@@ -9,6 +9,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.joaoalcantara.pedidos.outbox.aplicacao.RegistradorDeEvento;
+import com.joaoalcantara.pedidos.outbox.dominio.EventosDePedido;
+import com.joaoalcantara.pedidos.outbox.dominio.PedidoPago;
 import com.joaoalcantara.pedidos.pagamento.dominio.Pagamento;
 import com.joaoalcantara.pedidos.pagamento.dominio.PagamentoRepositorio;
 import com.joaoalcantara.pedidos.pagamento.dominio.StatusPagamento;
@@ -50,14 +53,17 @@ class ProcessadorDeEvento {
     private final PagamentoRepositorio pagamentos;
     private final PedidoRepositorio pedidos;
     private final ProdutoRepositorio produtos;
+    private final RegistradorDeEvento registrador;
     private final Clock relogio;
 
     ProcessadorDeEvento(EventoProcessadoRepositorio eventos, PagamentoRepositorio pagamentos,
-                        PedidoRepositorio pedidos, ProdutoRepositorio produtos, Clock relogio) {
+                        PedidoRepositorio pedidos, ProdutoRepositorio produtos,
+                        RegistradorDeEvento registrador, Clock relogio) {
         this.eventos = eventos;
         this.pagamentos = pagamentos;
         this.pedidos = pedidos;
         this.produtos = produtos;
+        this.registrador = registrador;
         this.relogio = relogio;
     }
 
@@ -89,7 +95,6 @@ class ProcessadorDeEvento {
         pagamentos.salvar(pagamento);
 
         Pedido pedido = pedidos.porIdComTrava(pagamento.getPedidoId()).orElseThrow();
-        boolean precisaBaixarEstoque = pedido.mantemReservaDeEstoque();
 
         // A entidade recusa a transicao se o pedido nao estiver aguardando
         // pagamento — um pedido cancelado que recebe "aprovado" atrasado para
@@ -97,9 +102,18 @@ class ProcessadorDeEvento {
         pedido.marcarComoPago();
         pedidos.salvar(pedido);
 
-        if (precisaBaixarEstoque) {
-            baixarEstoque(pedido);
-        }
+        // A baixa do estoque NAO acontece aqui. Ela saiu para o consumidor da
+        // fila (Etapa 9): no webhook, ela fazia a confirmacao do pagamento
+        // depender de o estoque estar saudavel, e um problema de estoque
+        // derrubaria a transacao inteira — com o gateway reenviando o evento por
+        // horas por causa de algo que nao tem relacao com o pagamento.
+
+        // Mesma transacao do fato: ou o pedido fica PAGO e o evento existe, ou
+        // nenhum dos dois. Nao ha publicacao aqui — publicar dentro da transacao
+        // e o erro que o outbox resolve.
+        registrador.registrar(EventosDePedido.PEDIDO_PAGO, String.valueOf(pedido.getId()),
+                new PedidoPago(pedido.getId(), pedido.getUsuarioId(), pedido.getValorTotal(),
+                        pagamento.getIdExterno(), relogio.instant()));
     }
 
     private void registrarStatus(EventoDoGateway evento, StatusPagamento status) {
@@ -109,19 +123,6 @@ class ProcessadorDeEvento {
         // O pedido continua AGUARDANDO_PAGAMENTO: uma tentativa recusada nao
         // encerra o pedido, o cliente ainda pode pagar com outro cartao. Quem
         // encerra pedido nao pago e a expiracao, na Etapa 10.
-    }
-
-    /** Mesma ordem de travamento das outras etapas, pelo mesmo motivo: deadlock. */
-    private void baixarEstoque(Pedido pedido) {
-        List<ItemPedido> itens = pedido.getItens().stream()
-                .sorted(Comparator.comparing(ItemPedido::getProdutoId))
-                .toList();
-
-        for (ItemPedido item : itens) {
-            Produto produto = produtos.porIdComTrava(item.getProdutoId()).orElseThrow();
-            produto.confirmarVenda(item.getQuantidade());
-            produtos.salvar(produto);
-        }
     }
 
     private Pagamento localizar(EventoDoGateway evento) {

@@ -123,9 +123,10 @@ class WebhookIT {
     }
 
     @Test
-    @DisplayName("pagamento aprovado confirma o pedido e baixa o estoque reservado")
+    @DisplayName("pagamento aprovado confirma o pedido e grava o evento no outbox, na mesma transacao")
     void pagamentoAprovado() throws Exception {
         Cenario cenario = novoCenario(10, 3);
+        Integer pendentesAntes = jdbc.queryForObject("SELECT count(*) FROM outbox WHERE publicado_em IS NULL", Integer.class);
 
         entregar(corpoDoEvento("evt_" + UUID.randomUUID(), "payment_intent.succeeded", cenario.idExterno()),
                 status().isOk());
@@ -134,10 +135,13 @@ class WebhookIT {
         assertThat(pagamentos.porIdExterno(cenario.idExterno()).orElseThrow().getStatus())
                 .isEqualTo(StatusPagamento.APROVADO);
 
-        Produto produto = produtos.porId(cenario.produtoId()).orElseThrow();
-        assertThat(produto.getEstoqueReservado()).as("as unidades sairam da reserva").isZero();
-        assertThat(produto.getEstoqueDisponivel()).as("e nao voltaram para o disponivel").isEqualTo(7);
-        assertThat(produto.getEstoqueTotal()).isEqualTo(7);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM outbox WHERE publicado_em IS NULL", Integer.class))
+                .as("o evento nasceu junto com a confirmacao do pedido")
+                .isEqualTo(pendentesAntes + 1);
+
+        assertThat(produtos.porId(cenario.produtoId()).orElseThrow().getEstoqueReservado())
+                .as("a baixa do estoque e trabalho do consumidor da fila, nao do webhook")
+                .isEqualTo(3);
     }
 
     @Test
@@ -156,15 +160,18 @@ class WebhookIT {
         // teria derrubado a requisicao se o evento tivesse sido reprocessado.
         assertThat(pedidos.porId(cenario.pedidoId()).orElseThrow().getStatus()).isEqualTo(StatusPedido.PAGO);
 
-        // A prova que interessa: o estoque saiu uma vez so.
-        Produto produto = produtos.porId(cenario.produtoId()).orElseThrow();
-        assertThat(produto.getEstoqueDisponivel()).isEqualTo(7);
-        assertThat(produto.getEstoqueReservado()).isZero();
-
+        // A prova que interessa: o efeito aconteceu uma vez so.
         Integer registros = jdbc.queryForObject(
                 "SELECT count(*) FROM eventos_processados WHERE id_externo LIKE 'evt_repetido_%'",
                 Integer.class);
         assertThat(registros).as("o evento foi registrado uma unica vez").isEqualTo(1);
+
+        Integer eventosNoOutbox = jdbc.queryForObject(
+                "SELECT count(*) FROM outbox WHERE agregado_id = ?", Integer.class,
+                String.valueOf(cenario.pedidoId()));
+        assertThat(eventosNoOutbox)
+                .as("um unico pedido.pago foi gerado: tres entregas, um evento")
+                .isEqualTo(1);
     }
 
     @Test

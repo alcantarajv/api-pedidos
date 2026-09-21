@@ -4,7 +4,7 @@ API REST de pedidos com pagamento por gateway externo, construída em Java 21 co
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
 
-> **Status:** em construção — Etapa 7 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 9 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -81,7 +81,15 @@ Repare no que o outbox **não** promete: entrega exatamente uma vez. Se o worker
 
 É por isso que os dois problemas deste projeto são o mesmo problema visto de dois lados: o outbox só é seguro porque o outro lado sabe ignorar repetição.
 
-Cada comportamento terá um teste que o comprova: um que entrega o mesmo webhook duas vezes e verifica um único efeito, e outro que simula falha na publicação e verifica que o evento continua no outbox para nova tentativa.
+Cada comportamento tem um teste que o comprova:
+
+| Teste | O que prova |
+|---|---|
+| `WebhookIT.mesmoEventoDuasVezes` | três entregas do mesmo evento, um único efeito |
+| `WebhookConcorrenteIT` | 12 entregas **simultâneas**, um único efeito |
+| `OutboxFalhaNaPublicacaoIT` | broker fora do ar: o evento continua pendente e é entregue quando ele volta |
+| `ConsumidoresIT.mensagemRepetida` | a mesma mensagem três vezes: um estoque baixado, um aviso enviado |
+| `FluxoCompletoIT` | o caminho inteiro, do webhook à notificação |
 
 ---
 
@@ -171,6 +179,52 @@ A alternativa comum — consultar *"já processei este evento?"* antes de aplica
 ### Erro de processamento devolve erro ao gateway, de propósito
 
 Um webhook que falha **precisa** falhar visivelmente: o gateway reentrega, e é assim que o evento não se perde. Só dois casos respondem 200 apesar de nada acontecer — evento repetido (já processado) e cobrança desconhecida (evento de outro ambiente compartilhando a mesma conta). Nos dois, reenviar não mudaria nada, e um 4xx faria o gateway repetir por horas e depois marcar o endpoint como problemático.
+
+### O worker marca como publicado só depois da confirmação do broker
+
+`convertAndSend` retorna assim que escreve no socket. O broker pode cair no milissegundo seguinte, e a linha já teria sido marcada como entregue. O publicador espera o *publisher confirm* antes de gravar `publicado_em` — é a diferença entre "mandei" e "chegou".
+
+E há um segundo detalhe: **confirmação positiva significa "o broker aceitou", não "alguma fila recebeu"**. Mensagem publicada em exchange sem fila ligada é descartada em silêncio. Com `mandatory=true` ela volta, e o worker trata como falha. Há um teste que publica um evento sem binding e verifica que a linha **não** é marcada como publicada — sem isso, um erro de configuração de fila viraria evento perdido sem rastro.
+
+### Cada evento do outbox tem sua própria transação
+
+Um lote de 50 numa transação só teria dois problemas: uma falha no evento 50 desfaria a marcação dos 49 anteriores — que já tinham sido entregues de verdade e seriam publicados de novo —, e a transação ficaria aberta durante todas as chamadas de rede ao broker, segurando conexão do pool muito além do necessário.
+
+Isso obrigou a separar `WorkerDoOutbox` de `EntregaDeEvento`: `@Transactional` só vale em chamada que passa pelo proxy do Spring. Um método chamando outro da mesma classe ignora a anotação **em silêncio** — a armadilha da auto-invocação, que aqui teria juntado todos os eventos numa transação sem ninguém perceber.
+
+### `FOR UPDATE SKIP LOCKED` para o worker escalar
+
+Antes de entregar, o evento é recarregado com trava. Com `SKIP LOCKED`, uma segunda instância da aplicação pega outro evento em vez de esperar pelo primeiro. Sem isso, escalar horizontalmente faria os workers formarem fila para a mesma linha, e o throughput de entrega não subiria com mais instâncias.
+
+### Índice parcial nos pendentes
+
+```sql
+CREATE INDEX outbox_pendentes ON outbox (criado_em) WHERE publicado_em IS NULL;
+```
+
+Só as linhas pendentes interessam ao worker, e elas são uma fração mínima da tabela depois de algum tempo de operação. Um índice sobre a coluna inteira cresceria com o histórico sem servir para nada.
+
+### O estoque baixa no consumidor, não no webhook
+
+Até a Etapa 8, o webhook confirmava o pagamento **e** baixava o estoque na mesma transação. Isso fazia a confirmação do pagamento depender de o estoque estar saudável: um produto com dados inconsistentes derrubaria a transação inteira, e o gateway reenviaria o evento por horas — por causa de um problema que não tem relação nenhuma com o pagamento.
+
+Separados, cada um falha sozinho. O pagamento é confirmado, o evento fica guardado no outbox, e a baixa de estoque é reprocessada pela fila quantas vezes for preciso.
+
+### A chave de idempotência do consumidor inclui o nome do consumidor
+
+`UNIQUE (id_mensagem, consumidor)`. O mesmo evento `pedido.pago` vai para a fila de estoque **e** para a de notificações. Se a chave fosse só o id da mensagem, o primeiro consumidor a processar bloquearia o segundo, e o cliente nunca seria avisado.
+
+### Nem toda violação de integridade é entrega duplicada
+
+Este foi um defeito real, encontrado por um teste que falhou por outro motivo. O `catch (DataIntegrityViolationException)` tratava **qualquer** erro de integridade como "outra entrega venceu a corrida" — e assim engoliu, com um log de debug, um `value too long for type character varying(36)`.
+
+A correção é barata: confirmar que o registro existe mesmo. Se existe, era corrida; se não existe, o erro é outro e precisa estourar, para a mensagem voltar à fila e, no limite, aparecer na fila de mortas.
+
+### Toda fila tem uma fila de mortas
+
+Esgotadas as três tentativas, a mensagem **não** volta para a fila (`default-requeue-rejected=false`): vai para a DLQ. Sem isso, uma mensagem que sempre falha volta para o fim da fila e gira para sempre, ocupando o consumidor e atrasando todas as outras.
+
+Mensagem sem o cabeçalho de idempotência é rejeitada de propósito: sem chave não há como garantir efeito único, e processar às cegas é pior do que mandar para a DLQ, onde alguém descobre o publicador defeituoso.
 
 ### Consultar o gateway não confirma o pedido
 
@@ -506,8 +560,8 @@ Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway 
 - [x] **Etapa 5** — Máquina de estados do pedido, com transições inválidas recusadas pelo domínio
 - [x] **Etapa 6** — Integração com o gateway: criação da cobrança e consulta de status
 - [x] **Etapa 7** — **Webhook idempotente**: verificação de assinatura, tabela de eventos processados, teste de entrega duplicada
-- [ ] **Etapa 8** — **Padrão outbox**: tabela, publicação transacional, worker de entrega, teste de falha na publicação
-- [ ] **Etapa 9** — Consumidores dos eventos: baixa de estoque e notificação, ambos idempotentes
+- [x] **Etapa 8** — **Padrão outbox**: tabela, publicação transacional, worker de entrega, teste de falha na publicação
+- [x] **Etapa 9** — Consumidores dos eventos: baixa de estoque e notificação, ambos idempotentes
 - [ ] **Etapa 10** — Expiração automática de pedidos não pagos e devolução de estoque
 - [ ] **Etapa 11** — Observabilidade: métricas do Actuator, logs estruturados com id de correlação
 - [ ] **Etapa 12** — Testes de integração com Testcontainers (PostgreSQL + RabbitMQ) e WireMock

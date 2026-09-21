@@ -65,9 +65,14 @@ public class WebhookServico {
             processador.processar(evento);
             return Resultado.PROCESSADO;
         } catch (DataIntegrityViolationException e) {
-            // Duas entregas do mesmo evento ao mesmo tempo: a outra venceu a
-            // corrida e ja aplicou o efeito. Nao e erro — e exatamente o que a
-            // restricao de unicidade existe para produzir.
+            // Nem toda violacao de integridade e entrega duplicada — uma coluna
+            // pequena demais ou uma chave estrangeira quebrada chegam aqui com o
+            // mesmo tipo de excecao. Confirmar que o evento foi mesmo registrado
+            // separa a corrida (esperada) do defeito (que precisa estourar e
+            // fazer o gateway reentregar).
+            if (!eventos.jaProcessado(evento.id())) {
+                throw e;
+            }
             log.info("Evento '{}' processado simultaneamente por outra entrega.", evento.id());
             return Resultado.REPETIDO;
         }

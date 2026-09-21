@@ -21,6 +21,6 @@ import org.springframework.test.context.ActiveProfiles;
 @Retention(RetentionPolicy.RUNTIME)
 @SpringBootTest
 @ActiveProfiles("test")
-@Import({PostgresDeTeste.class, RabbitDeTeste.class})
+@Import({PostgresDeTeste.class, RabbitDeTeste.class, FilaDeTeste.class})
 public @interface TesteDeIntegracao {
 }

@@ -143,13 +143,19 @@ class WebhookConcorrenteIT {
         assertThat(repetidos.get()).isEqualTo(THREADS - 1);
 
         // O juiz final e o banco, nao os contadores em memoria.
-        Produto depois = produtos.porId(produto.getId()).orElseThrow();
-        assertThat(depois.getEstoqueReservado()).as("as 5 unidades sairam da reserva uma vez so").isZero();
-        assertThat(depois.getEstoqueDisponivel()).isEqualTo(95);
-        assertThat(depois.getEstoqueTotal()).isEqualTo(95);
-
         Integer registros = jdbc.queryForObject(
                 "SELECT count(*) FROM eventos_processados WHERE id_externo = ?", Integer.class, idDoEvento);
-        assertThat(registros).isEqualTo(1);
+        assertThat(registros).as("o evento foi registrado uma unica vez").isEqualTo(1);
+
+        Integer eventosNoOutbox = jdbc.queryForObject(
+                "SELECT count(*) FROM outbox WHERE agregado_id = ?", Integer.class,
+                String.valueOf(pedido.getId()));
+        assertThat(eventosNoOutbox)
+                .as("doze entregas simultaneas, um unico pedido.pago publicado")
+                .isEqualTo(1);
+
+        // A baixa do estoque e do consumidor da fila (Etapa 9): no momento do
+        // webhook, as unidades continuam reservadas.
+        assertThat(produtos.porId(produto.getId()).orElseThrow().getEstoqueReservado()).isEqualTo(5);
     }
 }
