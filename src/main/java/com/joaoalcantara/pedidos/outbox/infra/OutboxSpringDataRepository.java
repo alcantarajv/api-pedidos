@@ -30,4 +30,6 @@ interface OutboxSpringDataRepository extends JpaRepository<OutboxEvento, Long> {
     Optional<OutboxEvento> travarSePendente(@Param("id") Long id);
 
     long countByPublicadoEmIsNull();
+
+    int deleteByPublicadoEmIsNotNullAndPublicadoEmBefore(java.time.Instant limite);
 }

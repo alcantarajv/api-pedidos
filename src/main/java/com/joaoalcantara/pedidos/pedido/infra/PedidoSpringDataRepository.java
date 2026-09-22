@@ -24,6 +24,14 @@ interface PedidoSpringDataRepository extends JpaRepository<Pedido, Long> {
 
     List<Pedido> findAllByOrderByCriadoEmDesc();
 
+    @Query("""
+            select p.id from Pedido p
+            where p.status = com.joaoalcantara.pedidos.pedido.dominio.StatusPedido.AGUARDANDO_PAGAMENTO
+              and p.criadoEm < :limite
+            order by p.criadoEm
+            """)
+    List<Long> idsExpirados(java.time.Instant limite, org.springframework.data.domain.Pageable quantidade);
+
     /** PESSIMISTIC_WRITE vira SELECT ... FOR UPDATE: a linha fica travada ate o commit. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select p from Pedido p where p.id = :id")

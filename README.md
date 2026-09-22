@@ -4,7 +4,7 @@ API REST de pedidos com pagamento por gateway externo, construída em Java 21 co
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
 
-> **Status:** em construção — Etapa 9 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 10 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -226,6 +226,38 @@ Esgotadas as três tentativas, a mensagem **não** volta para a fila (`default-r
 
 Mensagem sem o cabeçalho de idempotência é rejeitada de propósito: sem chave não há como garantir efeito único, e processar às cegas é pior do que mandar para a DLQ, onde alguém descobre o publicador defeituoso.
 
+### Pedido não pago expira e devolve o estoque
+
+A maioria dos carrinhos é abandonada. Sem expiração, cada pedido abandonado seguraria unidades para sempre: o catálogo mostraria "esgotado" com o depósito cheio, negando venda a quem compraria agora por causa de quem desistiu ontem.
+
+O prazo (30 minutos por padrão) é **política comercial, não número técnico** — curto demais irrita quem foi buscar o cartão, longo demais prende estoque. Por isso é configurável, como todos os limites deste projeto.
+
+O job reaproveita o `CanceladorDePedido`: expirar **é** cancelar, só que decidido pelo relógio em vez de por uma pessoa. Duplicar a devolução de estoque criaria duas implementações da mesma regra, e a segunda envelheceria sozinha.
+
+### O `Clock` injetado finalmente se paga
+
+A regra "expira em 30 minutos" só é verificável se der para pular 31. O teste troca o `Clock` por um ajustável e avança o tempo; a alternativa seria configurar um prazo de segundos e esperar de verdade — teste lento, instável, e que verificaria uma configuração diferente da de produção.
+
+É a decisão da Etapa 3 cobrando juros ao contrário: três etapas depois, uma regra temporal ficou testável sem nenhuma ginástica.
+
+### O que acontece se o cliente pagar no exato momento da expiração
+
+Esse é o caso feio, e ele não some por ignorá-lo. O job cancela o pedido e devolve o estoque; segundos depois chega o webhook dizendo "pago". A entidade recusa `CANCELADO → PAGO`, o endpoint responde 422 e o gateway reentrega — até desistir.
+
+A decisão é deixar assim, e **de propósito**: dinheiro recebido para pedido cancelado é caso de reembolso, decidido por gente. Um sistema que "resolvesse" isso sozinho — ressuscitando o pedido ou engolindo o evento — estaria escolhendo em silêncio entre vender sem estoque e ficar com o dinheiro do cliente.
+
+### Um teste para o comportamento, outro para a consulta
+
+A consulta de vencidos filtra por `status = AGUARDANDO_PAGAMENTO`. Descobri, quebrando o filtro de propósito, que **nenhum dos testes de comportamento falhava sem ele**: um pedido pago selecionado pela consulta é recusado pela máquina de estados, e o expirador trata a recusa como "não expirou". Correto — mas desperdiçado, porque o job carregaria e travaria linhas só para vê-las recusadas.
+
+O filtro ganhou então um teste próprio, que verifica a consulta em vez do efeito. A lição: **teste de comportamento não cobre otimização**, e otimização sem teste é o que alguém remove numa refatoração sem perceber.
+
+### A limpeza não apaga evento pendente
+
+Registros de idempotência com mais de 30 dias são removidos — passada a janela de retentativa de qualquer gateway, guardá-los só torna a consulta do caminho quente mais lenta. A retenção é folgada de propósito: apagar cedo demais faria um evento antigo ser tratado como novo, e a proteção inteira viraria pó.
+
+Do outbox, só saem as linhas **já publicadas**. Um evento pendente de 40 dias não é lixo — é a prova de um problema, e o próprio evento que ninguém recebeu.
+
 ### Consultar o gateway não confirma o pedido
 
 `GET /pagamento` atualiza o status da cobrança, mas **não** leva o pedido a `PAGO`, mesmo quando o gateway diz "aprovado". Essa transição é trabalho exclusivo do webhook (Etapa 7). Ter dois caminhos capazes de confirmar um pedido significaria manter duas implementações corretas da mesma regra — e a segunda, a que ninguém lembra de testar, é a que confirma um pedido duas vezes.
@@ -423,7 +455,7 @@ Transições inválidas são recusadas pelo domínio: um pedido `ENTREGUE` não 
 
 - Estoque é reservado na criação do pedido e confirmado no pagamento
 - Pedido cancelado ou expirado devolve o estoque
-- Pedido não pago expira após um prazo configurável e é cancelado automaticamente
+- Pedido não pago expira após 30 minutos (configurável) e é cancelado automaticamente, devolvendo o estoque
 - O preço do item é congelado na criação do pedido
 - Um `CLIENTE` só enxerga os próprios pedidos; um `ADMIN` gerencia produtos e vê todos
 - Webhook só é aceito com assinatura válida
@@ -562,7 +594,7 @@ Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway 
 - [x] **Etapa 7** — **Webhook idempotente**: verificação de assinatura, tabela de eventos processados, teste de entrega duplicada
 - [x] **Etapa 8** — **Padrão outbox**: tabela, publicação transacional, worker de entrega, teste de falha na publicação
 - [x] **Etapa 9** — Consumidores dos eventos: baixa de estoque e notificação, ambos idempotentes
-- [ ] **Etapa 10** — Expiração automática de pedidos não pagos e devolução de estoque
+- [x] **Etapa 10** — Expiração automática de pedidos não pagos e devolução de estoque
 - [ ] **Etapa 11** — Observabilidade: métricas do Actuator, logs estruturados com id de correlação
 - [ ] **Etapa 12** — Testes de integração com Testcontainers (PostgreSQL + RabbitMQ) e WireMock
 - [ ] **Etapa 13** — Dockerfile, Compose completo, CI no GitHub Actions

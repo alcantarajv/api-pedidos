@@ -26,4 +26,7 @@ public interface OutboxRepositorio {
     Optional<OutboxEvento> travarSePendente(Long id);
 
     long contarPendentes();
+
+    /** Remove eventos JA PUBLICADOS anteriores ao limite. Pendentes nunca saem. */
+    int apagarPublicadosAnterioresA(java.time.Instant limite);
 }

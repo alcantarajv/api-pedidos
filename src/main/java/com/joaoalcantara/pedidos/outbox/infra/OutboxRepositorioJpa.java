@@ -37,4 +37,9 @@ class OutboxRepositorioJpa implements OutboxRepositorio {
     public long contarPendentes() {
         return jpa.countByPublicadoEmIsNull();
     }
+
+    @Override
+    public int apagarPublicadosAnterioresA(java.time.Instant limite) {
+        return jpa.deleteByPublicadoEmIsNotNullAndPublicadoEmBefore(limite);
+    }
 }

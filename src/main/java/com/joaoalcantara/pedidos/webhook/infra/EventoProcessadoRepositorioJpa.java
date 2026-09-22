@@ -23,4 +23,9 @@ class EventoProcessadoRepositorioJpa implements EventoProcessadoRepositorio {
     public boolean jaProcessado(String idExterno) {
         return jpa.existsByIdExterno(idExterno);
     }
+
+    @Override
+    public int apagarAnterioresA(java.time.Instant limite) {
+        return jpa.deleteByProcessadoEmBefore(limite);
+    }
 }

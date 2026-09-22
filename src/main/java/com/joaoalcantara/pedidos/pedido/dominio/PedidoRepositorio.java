@@ -34,4 +34,13 @@ public interface PedidoRepositorio {
     List<Pedido> listarDoUsuario(Long usuarioId);
 
     List<Pedido> listarTodos();
+
+    /**
+     * Ids de pedidos que ainda aguardam pagamento e nasceram antes do limite.
+     *
+     * <p>Devolve ids, e nao entidades: a expiracao trata cada pedido em sua
+     * propria transacao, e carregar agregados aqui seria trabalho jogado fora —
+     * alem de trabalhar com dados que podem mudar antes de a vez deles chegar.</p>
+     */
+    List<Long> idsAguardandoPagamentoDesdeAntesDe(java.time.Instant limite, int quantidade);
 }

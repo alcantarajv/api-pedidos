@@ -52,4 +52,9 @@ class PedidoRepositorioJpa implements PedidoRepositorio {
     public List<Pedido> listarTodos() {
         return jpa.findAllByOrderByCriadoEmDesc();
     }
+
+    @Override
+    public List<Long> idsAguardandoPagamentoDesdeAntesDe(java.time.Instant limite, int quantidade) {
+        return jpa.idsExpirados(limite, org.springframework.data.domain.PageRequest.of(0, quantidade));
+    }
 }

@@ -6,4 +6,7 @@ public interface EventoProcessadoRepositorio {
     EventoProcessado salvar(EventoProcessado evento);
 
     boolean jaProcessado(String idExterno);
+
+    /** Remove registros anteriores ao limite. Devolve quantos sairam. */
+    int apagarAnterioresA(java.time.Instant limite);
 }

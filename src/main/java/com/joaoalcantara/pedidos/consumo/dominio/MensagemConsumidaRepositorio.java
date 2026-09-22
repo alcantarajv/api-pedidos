@@ -6,4 +6,7 @@ public interface MensagemConsumidaRepositorio {
     MensagemConsumida salvar(MensagemConsumida registro);
 
     boolean jaConsumida(String idMensagem, String consumidor);
+
+    /** Remove registros anteriores ao limite. Devolve quantos sairam. */
+    int apagarAnterioresA(java.time.Instant limite);
 }

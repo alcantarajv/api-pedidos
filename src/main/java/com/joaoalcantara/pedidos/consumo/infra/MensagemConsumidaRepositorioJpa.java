@@ -23,4 +23,9 @@ class MensagemConsumidaRepositorioJpa implements MensagemConsumidaRepositorio {
     public boolean jaConsumida(String idMensagem, String consumidor) {
         return jpa.existsByIdMensagemAndConsumidor(idMensagem, consumidor);
     }
+
+    @Override
+    public int apagarAnterioresA(java.time.Instant limite) {
+        return jpa.deleteByConsumidaEmBefore(limite);
+    }
 }
