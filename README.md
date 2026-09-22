@@ -4,12 +4,21 @@ API REST de pedidos com pagamento por gateway externo, construída em Java 21 co
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
 
-> **Status:** em construção — Etapa 14 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+## No ar
+
+**<https://api-pedidos.onrender.com>**
+
+[Demonstração ao vivo](https://api-pedidos.onrender.com) · [Swagger UI](https://api-pedidos.onrender.com/swagger-ui.html) · [Health](https://api-pedidos.onrender.com/actuator/health) · [Catálogo](https://api-pedidos.onrender.com/api/produtos)
+
+A raiz traz uma página que executa a demonstração da idempotência **ao vivo**: ela cria uma conta, monta um pedido e reenvia **a mesma requisição com a mesma `Idempotency-Key`**, mostrando `201` na primeira e `200` na segunda — com o mesmo pedido e o estoque saindo uma vez só. É o argumento central do projeto rodando no navegador, sem precisar de terminal.
+
+O serviço roda no plano gratuito do Render e hiberna quando ocioso — a primeira requisição depois de um tempo parado pode levar alguns segundos.
 
 ---
 
 ## Sumário
 
+- [No ar](#no-ar)
 - [Os dois problemas centrais](#os-dois-problemas-centrais)
   - [Problema 1 — O webhook que chega duas vezes](#problema-1--o-webhook-que-chega-duas-vezes)
   - [Problema 2 — Gravar no banco e publicar na fila](#problema-2--gravar-no-banco-e-publicar-na-fila)
@@ -96,7 +105,7 @@ Cada comportamento tem um teste que o comprova:
 
 ## Decisões técnicas
 
-Esta seção cresce a cada etapa. Cada entrada registra a escolha, o motivo e a alternativa descartada.
+Cada entrada registra a escolha, o motivo e a alternativa descartada. A seção foi alimentada etapa a etapa, não escrita no fim.
 
 ### RabbitMQ em vez de Kafka
 
@@ -369,6 +378,38 @@ Documentação gerada quebra em silêncio: um controller renomeado, uma anotaç�
 O campo `description` de cada operação carrega a decisão por trás dela: por que reenviar a mesma chave devolve 200 em vez de 201, por que pedido de outro cliente é 404 e não 403, por que consultar o gateway não confirma o pedido, por que o webhook responde 200 até para evento repetido.
 
 Uma referência que só lista campos obriga quem integra a descobrir o comportamento por tentativa e erro.
+
+### Banco no Neon, broker no CloudAMQP, aplicação no Render
+
+Três provedores em vez de um, por dois motivos concretos:
+
+- **O PostgreSQL gratuito do Render é apagado 30 dias depois de criado.** Num portfólio, isso significa o link ao vivo morrendo todo mês — provavelmente sem aviso, provavelmente na semana em que alguém for olhar. O plano gratuito do Neon é permanente.
+- **O Render não oferece RabbitMQ gerenciado**, e rodar um por conta exigiria um *private service*, que não tem plano gratuito. O CloudAMQP oferece.
+
+A aplicação não sabe a diferença: o broker e o banco são configuração, não código. Trocar `RABBITMQ_URL` por um RabbitMQ em qualquer outro lugar não exige recompilar nada.
+
+### Infraestrutura em arquivo, não no painel
+
+`render.yaml` descreve o serviço, as variáveis e o health check. Quem lê o repositório vê o que está no ar, e uma mudança de configuração passa por commit e revisão em vez de acontecer num formulário que ninguém mais viu.
+
+Duas escolhas dentro dele:
+
+- **`autoDeployTrigger: checksPass`**, não `commit`. O deploy só acontece se o CI passar — um push que quebra os testes não chega em produção.
+- **`healthCheckPath: /actuator/health`**. Sem isso o Render só verifica se a porta abriu, e a porta abre antes de o Flyway terminar de migrar. Como o health agrega banco e broker, uma instância que perdeu o CloudAMQP é marcada como não saudável em vez de responder 200 com a fila parada por trás.
+
+### O `JWT_SECRET` é gerado pelo Render, não escolhido por mim
+
+`generateValue: true`: o Render gera 256 bits aleatórios na criação e **nunca os mostra em lugar nenhum** — exatamente o que se quer de uma chave de assinatura. Ele fica estável entre deploys; se fosse regenerado a cada subida, todos os tokens emitidos seriam invalidados.
+
+### Uma página inicial estática, sem framework
+
+A raiz de uma API devolveria 401, o que parece um site quebrado para quem abre o link do portfólio. A página é um único HTML com `fetch` — sem build, sem dependência, sem etapa a mais no Dockerfile.
+
+Ela não *descreve* a idempotência: ela **executa**. Cria uma conta descartável, envia a mesma requisição duas vezes com a mesma chave e mostra os dois status lado a lado. No fim, cancela o pedido — devolvendo o estoque, para que a demonstração não consuma o catálogo a cada visita.
+
+### Dado de demonstração numa migration
+
+`V10` insere um produto, condicionalmente. É discutível colocar dado de demonstração no schema, e a alternativa era pior: sem nenhum produto, a página inicial do deploy público mostraria um erro para quem abre o link. O `INSERT` é condicional, então rodar de novo não duplica nada.
 
 ### Consultar o gateway não confirma o pedido
 
@@ -757,11 +798,15 @@ O terceiro caso é o mais instrutivo: o teste de comportamento **não** falhou, 
 
 ## Stack
 
-Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway · JPA/Hibernate · Stripe · JUnit 5 · AssertJ · Testcontainers · WireMock · Docker · GitHub Actions
+Java 21 · Spring Boot 4.1 · Spring Security · PostgreSQL 17 · RabbitMQ 4 · Flyway · JPA/Hibernate · JJWT · Stripe · Micrometer/Prometheus · springdoc-openapi 3 · JUnit 5 · AssertJ · Mockito · Testcontainers 2 · WireMock · Docker · GitHub Actions
 
 ---
 
 ## Roadmap
+
+Todas as quinze etapas concluídas. Cada uma virou um commit, e a seção de
+decisões técnicas acima foi alimentada a cada uma delas.
+
 
 - [x] **Etapa 0** — Repositório: README, `.gitignore`, primeiro commit
 - [x] **Etapa 1** — Scaffold Spring Boot + Docker Compose com PostgreSQL e RabbitMQ
@@ -778,7 +823,7 @@ Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway 
 - [x] **Etapa 12** — Testes de integração com Testcontainers (PostgreSQL + RabbitMQ) e WireMock
 - [x] **Etapa 13** — Dockerfile, Compose completo, CI no GitHub Actions
 - [x] **Etapa 14** — Documentação OpenAPI/Swagger
-- [ ] **Etapa 15** — Deploy público e README final com link ao vivo
+- [x] **Etapa 15** — Deploy público e README final com link ao vivo
 
 ---
 

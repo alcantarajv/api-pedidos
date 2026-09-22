@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API de Pedidos e Pagamentos</title>
+<style>
+  :root {
+    --fundo: #0f1115;
+    --cartao: #171a21;
+    --borda: #262b36;
+    --texto: #e6e9ef;
+    --suave: #9aa4b2;
+    --destaque: #4ade80;
+    --alerta: #fbbf24;
+    --erro: #f87171;
+    --codigo: #0b0d11;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--fundo);
+    color: var(--texto);
+    font: 16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 48px 20px 72px; }
+  h1 { font-size: 2rem; margin: 0 0 8px; letter-spacing: -0.02em; }
+  h2 { font-size: 1.25rem; margin: 40px 0 12px; letter-spacing: -0.01em; }
+  p { color: var(--suave); }
+  p.chamada { color: var(--texto); font-size: 1.05rem; }
+  a { color: var(--destaque); }
+  code { background: var(--codigo); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+  .cartao {
+    background: var(--cartao);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: 20px;
+    margin: 20px 0;
+  }
+  button {
+    background: var(--destaque);
+    color: #06210f;
+    border: 0;
+    border-radius: 8px;
+    padding: 12px 20px;
+    font: 600 15px system-ui, sans-serif;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.55; cursor: progress; }
+  pre {
+    background: var(--codigo);
+    border: 1px solid var(--borda);
+    border-radius: 8px;
+    padding: 14px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 14px 0 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .ok { color: var(--destaque); }
+  .aviso { color: var(--alerta); }
+  .ruim { color: var(--erro); }
+  ul { color: var(--suave); }
+  li { margin: 6px 0; }
+  .rodape { margin-top: 56px; border-top: 1px solid var(--borda); padding-top: 20px; font-size: 14px; }
+  .links a { margin-right: 18px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>API de Pedidos e Pagamentos</h1>
+  <p class="chamada">
+    O problema deste projeto não é o CRUD de produtos. É o que acontece quando a aplicação
+    <strong>depende de outro sistema</strong>: o webhook que chega duas vezes, e a gravação no banco
+    que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
+  </p>
+
+  <div class="links">
+    <a href="/swagger-ui.html">Documentação (Swagger)</a>
+    <a href="/actuator/health">Health</a>
+    <a href="/api/produtos">Catálogo</a>
+    <a href="https://github.com/alcantarajv/api-pedidos">Código no GitHub</a>
+  </div>
+
+  <h2>Demonstração ao vivo: a mesma requisição, duas vezes</h2>
+  <p>
+    Criar um pedido exige o cabeçalho <code>Idempotency-Key</code>. O botão abaixo envia
+    <strong>a mesma requisição duas vezes, com a mesma chave</strong> — é o que acontece quando um
+    cliente perde a resposta por timeout e tenta de novo.
+  </p>
+  <p>
+    A primeira volta <code>201 Created</code>. A segunda volta <code>200 OK</code> com
+    <strong>o mesmo pedido</strong>, e o estoque sai uma vez só.
+  </p>
+
+  <div class="cartao">
+    <button id="executar">Executar a demonstração</button>
+    <pre id="saida">Pronto. Clique no botão acima.</pre>
+  </div>
+
+  <h2>O que mais está no ar</h2>
+  <ul>
+    <li><strong>Webhook idempotente</strong> — assinatura HMAC verificada, e o id do evento gravado
+      na mesma transação do efeito. A segunda entrega colide na restrição de unicidade e não
+      produz efeito novo.</li>
+    <li><strong>Padrão outbox</strong> — o evento do pedido pago é gravado na mesma transação do
+      pedido; um worker publica depois e só marca como entregue após a confirmação do broker.</li>
+    <li><strong>Consumidores idempotentes</strong> — baixa de estoque e notificação, cada um com o
+      próprio registro de consumo.</li>
+    <li><strong>Expiração automática</strong> — pedido não pago devolve o estoque ao catálogo.</li>
+  </ul>
+
+  <p class="rodape">
+    O serviço roda no plano gratuito do Render e hiberna quando ocioso — a primeira requisição
+    depois de um tempo parado pode levar alguns segundos.<br>
+    <strong>João Vitor Alcântara Corrêa</strong> ·
+    <a href="https://github.com/alcantarajv">GitHub</a> ·
+    <a href="https://linkedin.com/in/joaovalcantara">LinkedIn</a>
+  </p>
+</main>
+
+<script>
+const botao = document.getElementById('executar');
+const saida = document.getElementById('saida');
+
+const linhas = [];
+function escrever(texto, classe) {
+  linhas.push(classe ? `<span class="${classe}">${texto}</span>` : texto);
+  saida.innerHTML = linhas.join('\n');
+}
+
+async function pedirJson(url, opcoes) {
+  const resposta = await fetch(url, opcoes);
+  const texto = await resposta.text();
+  let corpo = null;
+  try { corpo = texto ? JSON.parse(texto) : null; } catch { corpo = texto; }
+  return { status: resposta.status, corpo };
+}
+
+botao.addEventListener('click', async () => {
+  botao.disabled = true;
+  linhas.length = 0;
+  saida.innerHTML = '';
+
+  try {
+    // 1. Uma conta descartavel, criada na hora. O registro publico sempre cria
+    //    CLIENTE -- se o papel viesse no corpo, qualquer um se autopromoveria.
+    const email = `visitante-${crypto.randomUUID()}@exemplo.com`;
+    const senha = 'senha-de-demonstracao';
+
+    escrever('$ POST /api/auth/registrar');
+    const registro = await pedirJson('/api/auth/registrar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nome: 'Visitante', email, senha })
+    });
+    escrever(`  ${registro.status} -- conta criada com papel ${registro.corpo?.papel}`, 'ok');
+
+    escrever('\n$ POST /api/auth/login');
+    const login = await pedirJson('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, senha })
+    });
+    const token = login.corpo?.token;
+    escrever(`  ${login.status} -- token recebido`, 'ok');
+
+    // 2. Pega um produto do catalogo publico.
+    escrever('\n$ GET /api/produtos');
+    const catalogo = await pedirJson('/api/produtos');
+    const produto = (catalogo.corpo || []).find(p => p.estoqueDisponivel > 0);
+    if (!produto) {
+      escrever('  Nenhum produto disponivel no catalogo agora.', 'aviso');
+      botao.disabled = false;
+      return;
+    }
+    escrever(`  ${catalogo.status} -- "${produto.nome}", ${produto.estoqueDisponivel} em estoque`, 'ok');
+
+    // 3. A mesma chave, duas vezes.
+    const chave = crypto.randomUUID();
+    const cabecalhos = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      'Idempotency-Key': chave
+    };
+    const corpoDoPedido = JSON.stringify({ itens: [{ produtoId: produto.id, quantidade: 1 }] });
+
+    escrever(`\nIdempotency-Key: ${chave}`, 'aviso');
+
+    escrever('\n$ POST /api/pedidos            (1a vez)');
+    const primeira = await pedirJson('/api/pedidos', { method: 'POST', headers: cabecalhos, body: corpoDoPedido });
+    escrever(`  ${primeira.status} -- pedido #${primeira.corpo?.id}, total R$ ${primeira.corpo?.valorTotal}`,
+             primeira.status === 201 ? 'ok' : 'ruim');
+
+    escrever('\n$ POST /api/pedidos            (2a vez, MESMA chave)');
+    const segunda = await pedirJson('/api/pedidos', { method: 'POST', headers: cabecalhos, body: corpoDoPedido });
+    escrever(`  ${segunda.status} -- pedido #${segunda.corpo?.id}, total R$ ${segunda.corpo?.valorTotal}`,
+             segunda.status === 200 ? 'ok' : 'ruim');
+
+    // 4. O veredito.
+    const mesmoPedido = primeira.corpo?.id === segunda.corpo?.id;
+    escrever('\n----------------------------------------');
+    if (primeira.status === 201 && segunda.status === 200 && mesmoPedido) {
+      escrever(`201 na primeira, 200 na segunda, mesmo pedido #${primeira.corpo?.id}.`, 'ok');
+      escrever('Um unico pedido existe. O estoque saiu uma vez so.', 'ok');
+    } else {
+      escrever('Resultado inesperado -- veja os status acima.', 'ruim');
+    }
+
+    // 5. Cancela, devolvendo o estoque: a demonstracao nao pode consumir o
+    //    catalogo a cada visita.
+    escrever('\n$ POST /api/pedidos/' + primeira.corpo?.id + '/cancelamento');
+    const cancelamento = await pedirJson(`/api/pedidos/${primeira.corpo?.id}/cancelamento`, {
+      method: 'POST', headers: { 'Authorization': `Bearer ${token}` }
+    });
+    escrever(`  ${cancelamento.status} -- ${cancelamento.corpo?.status}, estoque devolvido ao catalogo`, 'ok');
+
+  } catch (erro) {
+    escrever(`\nFalha ao falar com a API: ${erro.message}`, 'ruim');
+  } finally {
+    botao.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
