@@ -4,7 +4,7 @@ API REST de pedidos com pagamento por gateway externo, construída em Java 21 co
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
 
-> **Status:** em construção — Etapa 11 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 12 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -18,6 +18,7 @@ O que este projeto resolve não é o CRUD de produtos — é o que acontece quan
 - [Regras de negócio](#regras-de-negócio)
 - [API](#api)
 - [Como rodar](#como-rodar)
+- [Testes](#testes)
 - [Stack](#stack)
 - [Roadmap](#roadmap)
 
@@ -607,19 +608,73 @@ O `health` agrega o estado do banco e do broker: se qualquer um dos dois estiver
 
 Pela IDE, a classe `TestPedidosApplication` sobe a aplicação com PostgreSQL e RabbitMQ descartáveis via Testcontainers — as duas dependências nascem com o processo e morrem junto, e cada execução começa com o banco limpo.
 
-### Testes
+---
+
+## Testes
+
+**191 testes: 94 unitários e 97 de integração.**
 
 ```bash
 ./mvnw test
 ```
 
-Roda só os unitários — rápido, sem Docker.
+Só os unitários — regras de domínio, sem Docker, **5 segundos**. É o comando do dia a dia.
 
 ```bash
 ./mvnw verify
 ```
 
-Roda também os testes de integração (`*IT`), que sobem contêineres de verdade e por isso exigem Docker ligado.
+A suíte inteira, com PostgreSQL e RabbitMQ de verdade em contêiner: **~60 segundos**. Exige Docker ligado.
+
+### Duas camadas, com propósitos diferentes
+
+| | Unitários (`*Test`) | Integração (`*IT`) |
+|---|---|---|
+| Rodados por | Surefire | Failsafe |
+| Dependem de | nada | PostgreSQL + RabbitMQ + WireMock |
+| Provam | a regra de negócio | que as peças se encaixam |
+| Exemplo | a matriz de 42 transições do pedido | 12 entregas simultâneas do mesmo webhook |
+
+A separação existe para que rodar teste continue barato. Se cada execução custasse subir contêineres, o resultado prático seria rodar menos teste.
+
+### Um contêiner por suíte, não por contexto
+
+Esta suíte tem sete configurações de contexto diferentes — umas com MockMvc, outras com relógio ajustável, outra com o publicador substituído por um dublê. O Spring cacheia cada uma separadamente, e com o contêiner declarado por contexto isso subia **14 contêineres** numa execução.
+
+Os contêineres agora são estáticos: sobem uma vez por JVM e são compartilhados. A suíte caiu de **1min35 para 60s**, e em CI — onde a imagem ainda precisa ser baixada — a diferença é maior.
+
+O detalhe que falta em quase todo exemplo é o `@Bean(destroyMethod = "")`: sem ele, o Spring chama `stop()` ao fechar o primeiro contexto e os seguintes encontram um contêiner morto.
+
+### O preço de compartilhar: isolamento é responsabilidade do teste
+
+Banco e broker atravessam as classes de teste. Isso é deliberado — o ganho de tempo compensa —, mas cobra disciplina:
+
+- Testes que precisam de contagem exata **limpam as tabelas** que usam (`TRUNCATE ... CASCADE` no `@BeforeEach`).
+- Os demais trabalham com dados próprios: e-mails e nomes de produto com `UUID`, nunca ids fixos.
+- Testes de fila **esvaziam** as filas que leem, e usam uma fila exclusiva (`pedidos.teste`) em vez de disputar mensagem com os consumidores de produção.
+- Os jobs agendados ficam **desligados** no perfil de teste (intervalo de 1 hora). Um job disparando no meio de outro teste mudaria o estoque pelas costas dele.
+
+Cada uma dessas regras nasceu de um teste que ficou instável. É o custo real de uma suíte que fala com infraestrutura — e é mais barato que a alternativa, que é não testar a infraestrutura.
+
+### Por que não banco em memória
+
+A garantia central do projeto depende de coisas que só o PostgreSQL tem: o erro de violação de unicidade que a idempotência traduz, o `FOR UPDATE SKIP LOCKED` do worker do outbox, os índices parciais. Testar contra H2 validaria um sistema diferente do que roda em produção — exatamente na parte que mais importa.
+
+O mesmo para o RabbitMQ: o que precisa ser exercitado é a publicação falhar, a mensagem ficar no outbox, o consumidor receber o evento duas vezes, a mensagem ruim cair na fila de mortas. Um dublê responderia sempre com sucesso.
+
+Cada execução também prova, de graça, que **as migrations aplicam do zero**: o contêiner nasce vazio e o Flyway roda as nove migrations antes do primeiro teste.
+
+### Quando um teste passa, ele foi verificado
+
+Todo mecanismo central deste projeto teve a proteção removida de propósito, para confirmar que o teste acusa:
+
+| Proteção removida | O que o teste acusou |
+|---|---|
+| `SELECT ... FOR UPDATE` na reserva | **8 de 12** clientes levaram a mesma última unidade |
+| `INSERT` do evento fora da transação | 11 de 12 entregas estouraram com transição inválida |
+| Filtro de status na consulta de expiração | (nada — e por isso a consulta ganhou teste próprio) |
+
+O terceiro caso é o mais instrutivo: o teste de comportamento **não** falhou, porque a máquina de estados recusava a transição de qualquer jeito. Teste de comportamento não cobre otimização.
 
 ---
 
@@ -643,7 +698,7 @@ Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway 
 - [x] **Etapa 9** — Consumidores dos eventos: baixa de estoque e notificação, ambos idempotentes
 - [x] **Etapa 10** — Expiração automática de pedidos não pagos e devolução de estoque
 - [x] **Etapa 11** — Observabilidade: métricas do Actuator, logs estruturados com id de correlação
-- [ ] **Etapa 12** — Testes de integração com Testcontainers (PostgreSQL + RabbitMQ) e WireMock
+- [x] **Etapa 12** — Testes de integração com Testcontainers (PostgreSQL + RabbitMQ) e WireMock
 - [ ] **Etapa 13** — Dockerfile, Compose completo, CI no GitHub Actions
 - [ ] **Etapa 14** — Documentação OpenAPI/Swagger
 - [ ] **Etapa 15** — Deploy público e README final com link ao vivo
