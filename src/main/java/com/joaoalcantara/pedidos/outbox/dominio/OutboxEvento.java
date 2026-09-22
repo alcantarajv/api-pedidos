@@ -74,12 +74,23 @@ public class OutboxEvento {
     @Column(name = "ultimo_erro", length = 500)
     private String ultimoErro;
 
+    /**
+     * O id de correlacao de quem originou o evento.
+     *
+     * <p>Copiado para o cabecalho da mensagem na publicacao, e recolocado no MDC
+     * pelo consumidor. E o que permite seguir um pedido do webhook ate a
+     * notificacao com uma unica busca no log.</p>
+     */
+    @Column(name = "correlacao_id", length = 64)
+    private String correlacaoId;
+
     protected OutboxEvento() {
         // exigido pelo JPA
     }
 
-    public OutboxEvento(String tipo, String agregadoId, String payload, Instant criadoEm) {
+    public OutboxEvento(String tipo, String agregadoId, String payload, Instant criadoEm, String correlacaoId) {
         this.idEvento = UUID.randomUUID().toString();
+        this.correlacaoId = correlacaoId;
         this.tipo = Objects.requireNonNull(tipo, "tipo");
         this.agregadoId = Objects.requireNonNull(agregadoId, "agregadoId");
         this.payload = Objects.requireNonNull(payload, "payload");
@@ -144,5 +155,9 @@ public class OutboxEvento {
 
     public String getUltimoErro() {
         return ultimoErro;
+    }
+
+    public String getCorrelacaoId() {
+        return correlacaoId;
     }
 }

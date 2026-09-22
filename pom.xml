@@ -65,6 +65,23 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-actuator</artifactId>
 		</dependency>
+		<!--
+			Metricas. No Spring Boot 4 o Micrometer tambem virou starter proprio:
+			o actuator sozinho expoe health e info, mas nao instrumenta nada.
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-micrometer-metrics</artifactId>
+		</dependency>
+		<!--
+			Formato Prometheus, que virou o denominador comum de coleta: Grafana,
+			Datadog e New Relic leem todos. Sem um registry concreto, as metricas
+			sao coletadas em memoria e nunca saem da aplicacao.
+		-->
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-registry-prometheus</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-database-postgresql</artifactId>
@@ -132,6 +149,11 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-actuator-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-micrometer-metrics-test</artifactId>
 			<scope>test</scope>
 		</dependency>
 		<dependency>

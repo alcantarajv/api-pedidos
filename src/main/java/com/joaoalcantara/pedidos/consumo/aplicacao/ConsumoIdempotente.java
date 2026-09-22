@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 
+import com.joaoalcantara.pedidos.comum.observabilidade.Metricas;
 import com.joaoalcantara.pedidos.consumo.dominio.MensagemConsumidaRepositorio;
 
 /**
@@ -31,10 +32,12 @@ public class ConsumoIdempotente {
 
     private final MensagemConsumidaRepositorio registros;
     private final AplicadorDeConsumo aplicador;
+    private final Metricas metricas;
 
-    ConsumoIdempotente(MensagemConsumidaRepositorio registros, AplicadorDeConsumo aplicador) {
+    ConsumoIdempotente(MensagemConsumidaRepositorio registros, AplicadorDeConsumo aplicador, Metricas metricas) {
         this.registros = registros;
         this.aplicador = aplicador;
+        this.metricas = metricas;
     }
 
     /**
@@ -45,11 +48,13 @@ public class ConsumoIdempotente {
         // Consulta previa: resolve a reentrega comum sem provocar erro no banco.
         if (registros.jaConsumida(idMensagem, consumidor)) {
             log.debug("Mensagem {} ja consumida por {}; ignorando repeticao.", idMensagem, consumidor);
+            metricas.mensagemConsumida(consumidor, "repetido");
             return false;
         }
 
         try {
             aplicador.aplicar(idMensagem, consumidor, efeito);
+            metricas.mensagemConsumida(consumidor, "processado");
             return true;
         } catch (DataIntegrityViolationException e) {
             // Nem toda violacao de integridade e entrega duplicada: campo grande
@@ -66,6 +71,7 @@ public class ConsumoIdempotente {
                 throw e;
             }
             log.debug("Mensagem {} consumida simultaneamente por outra entrega de {}.", idMensagem, consumidor);
+            metricas.mensagemConsumida(consumidor, "repetido");
             return false;
         }
     }

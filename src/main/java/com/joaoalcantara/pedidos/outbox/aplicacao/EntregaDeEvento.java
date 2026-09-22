@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.joaoalcantara.pedidos.comum.observabilidade.Metricas;
 import com.joaoalcantara.pedidos.outbox.dominio.OutboxEvento;
 import com.joaoalcantara.pedidos.outbox.dominio.OutboxRepositorio;
 import com.joaoalcantara.pedidos.outbox.dominio.PublicadorDeMensagem;
@@ -28,11 +29,14 @@ public class EntregaDeEvento {
 
     private final OutboxRepositorio outbox;
     private final PublicadorDeMensagem publicador;
+    private final Metricas metricas;
     private final Clock relogio;
 
-    public EntregaDeEvento(OutboxRepositorio outbox, PublicadorDeMensagem publicador, Clock relogio) {
+    public EntregaDeEvento(OutboxRepositorio outbox, PublicadorDeMensagem publicador,
+                           Metricas metricas, Clock relogio) {
         this.outbox = outbox;
         this.publicador = publicador;
+        this.metricas = metricas;
         this.relogio = relogio;
     }
 
@@ -57,6 +61,7 @@ public class EntregaDeEvento {
             // existe para evitar.
             evento.marcarPublicado(relogio.instant());
             outbox.salvar(evento);
+            metricas.publicacaoDoOutbox("sucesso");
             return true;
         } catch (RuntimeException e) {
             // A falha e registrada e a linha continua pendente. Nao relancamos:
@@ -65,6 +70,7 @@ public class EntregaDeEvento {
                     evento.getIdEvento(), evento.getTentativas() + 1, e.getMessage());
             evento.registrarFalha(e.getMessage());
             outbox.salvar(evento);
+            metricas.publicacaoDoOutbox("falha");
             return false;
         }
     }

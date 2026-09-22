@@ -9,6 +9,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.joaoalcantara.pedidos.comum.observabilidade.Correlacao;
 import com.joaoalcantara.pedidos.consumo.dominio.MensagemConsumidaRepositorio;
 import com.joaoalcantara.pedidos.outbox.dominio.OutboxRepositorio;
 import com.joaoalcantara.pedidos.webhook.dominio.EventoProcessadoRepositorio;
@@ -51,7 +52,7 @@ public class LimpezaDeRegistros {
 
     @Scheduled(fixedDelayString = "${pedidos.limpeza.intervalo-ms:3600000}")
     public void rodar() {
-        limpar();
+        Correlacao.executarCom(Correlacao.gerar(), this::limpar);
     }
 
     @Transactional

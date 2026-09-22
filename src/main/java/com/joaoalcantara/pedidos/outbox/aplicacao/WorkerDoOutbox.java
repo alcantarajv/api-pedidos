@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import com.joaoalcantara.pedidos.comum.observabilidade.Correlacao;
 import com.joaoalcantara.pedidos.outbox.dominio.OutboxEvento;
 import com.joaoalcantara.pedidos.outbox.dominio.OutboxRepositorio;
 import com.joaoalcantara.pedidos.outbox.infra.PropriedadesDoOutbox;
@@ -43,9 +44,14 @@ public class WorkerDoOutbox {
         this.propriedades = propriedades;
     }
 
+    /**
+     * Cada rodada ganha um id de correlacao proprio: sem isso, as linhas de log
+     * de um job nao teriam como ser agrupadas, e o campo ficaria vazio
+     * justamente no processo que roda sozinho, longe de qualquer requisicao.
+     */
     @Scheduled(fixedDelayString = "${pedidos.outbox.intervalo-ms:1000}")
     public void rodar() {
-        despacharLote();
+        Correlacao.executarCom(Correlacao.gerar(), this::despacharLote);
     }
 
     /**

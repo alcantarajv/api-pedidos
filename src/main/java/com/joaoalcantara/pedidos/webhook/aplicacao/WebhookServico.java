@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
+import com.joaoalcantara.pedidos.comum.observabilidade.Metricas;
 import com.joaoalcantara.pedidos.webhook.dominio.EventoProcessadoRepositorio;
 import com.joaoalcantara.pedidos.webhook.infra.LeitorDeEvento;
 import com.joaoalcantara.pedidos.webhook.infra.VerificadorDeAssinatura;
@@ -38,13 +39,16 @@ public class WebhookServico {
     private final LeitorDeEvento leitor;
     private final EventoProcessadoRepositorio eventos;
     private final ProcessadorDeEvento processador;
+    private final Metricas metricas;
 
     public WebhookServico(VerificadorDeAssinatura verificador, LeitorDeEvento leitor,
-                          EventoProcessadoRepositorio eventos, ProcessadorDeEvento processador) {
+                          EventoProcessadoRepositorio eventos, ProcessadorDeEvento processador,
+                          Metricas metricas) {
         this.verificador = verificador;
         this.leitor = leitor;
         this.eventos = eventos;
         this.processador = processador;
+        this.metricas = metricas;
     }
 
     /**
@@ -58,11 +62,13 @@ public class WebhookServico {
 
         if (eventos.jaProcessado(evento.id())) {
             log.info("Evento '{}' ja havia sido processado; nada a fazer.", evento.id());
+            metricas.eventoDoGateway("repetido");
             return Resultado.REPETIDO;
         }
 
         try {
             processador.processar(evento);
+            metricas.eventoDoGateway("processado");
             return Resultado.PROCESSADO;
         } catch (DataIntegrityViolationException e) {
             // Nem toda violacao de integridade e entrega duplicada — uma coluna
@@ -74,6 +80,7 @@ public class WebhookServico {
                 throw e;
             }
             log.info("Evento '{}' processado simultaneamente por outra entrega.", evento.id());
+            metricas.eventoDoGateway("repetido");
             return Resultado.REPETIDO;
         }
     }

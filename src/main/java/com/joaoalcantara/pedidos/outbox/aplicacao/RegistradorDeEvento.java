@@ -4,6 +4,7 @@ import java.time.Clock;
 
 import org.springframework.stereotype.Component;
 
+import com.joaoalcantara.pedidos.comum.observabilidade.Correlacao;
 import com.joaoalcantara.pedidos.outbox.dominio.OutboxEvento;
 import com.joaoalcantara.pedidos.outbox.dominio.OutboxRepositorio;
 
@@ -32,6 +33,7 @@ public class RegistradorDeEvento {
 
     public OutboxEvento registrar(String tipo, String agregadoId, Object payload) {
         String json = objectMapper.writeValueAsString(payload);
-        return outbox.salvar(new OutboxEvento(tipo, agregadoId, json, relogio.instant()));
+        // O id de correlacao de quem esta chamando viaja com o evento.
+        return outbox.salvar(new OutboxEvento(tipo, agregadoId, json, relogio.instant(), Correlacao.atual()));
     }
 }

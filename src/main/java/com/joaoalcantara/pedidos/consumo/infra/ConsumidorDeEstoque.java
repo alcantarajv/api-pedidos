@@ -11,6 +11,7 @@ import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.joaoalcantara.pedidos.comum.observabilidade.Correlacao;
 import com.joaoalcantara.pedidos.consumo.aplicacao.ConsumoIdempotente;
 import com.joaoalcantara.pedidos.outbox.dominio.PedidoPago;
 import com.joaoalcantara.pedidos.outbox.infra.FilaConfig;
@@ -55,7 +56,13 @@ public class ConsumidorDeEstoque {
 
     @RabbitListener(queues = FilaConfig.FILA_ESTOQUE)
     public void receber(@Payload String corpo,
-                        @Header(name = "x-id-evento", required = false) String idEvento) {
+                        @Header(name = "x-id-evento", required = false) String idEvento,
+                        @Header(name = Correlacao.CABECALHO_AMQP, required = false) String correlacaoId) {
+
+        Correlacao.executarCom(correlacaoId, () -> processar(corpo, idEvento));
+    }
+
+    private void processar(String corpo, String idEvento) {
 
         if (idEvento == null || idEvento.isBlank()) {
             // Sem chave de idempotencia nao ha como garantir efeito unico.

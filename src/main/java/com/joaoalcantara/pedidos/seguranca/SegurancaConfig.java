@@ -45,6 +45,12 @@ public class SegurancaConfig {
                         .requestMatchers(HttpMethod.POST, "/api/auth/registrar", "/api/auth/login").permitAll()
                         .requestMatchers("/actuator/health/**").permitAll()
 
+                        // Metricas so para ADMIN. Elas contam o volume de
+                        // pedidos, a taxa de falha e o tamanho da fila — mapa
+                        // pronto de quando a loja esta fragilizada.
+                        .requestMatchers("/actuator/metrics/**", "/actuator/prometheus")
+                        .hasRole(Papel.ADMIN.name())
+
                         // O gateway chama sem token — nao existe usuario numa
                         // chamada feita por outro servidor. Quem autentica esta
                         // rota e a assinatura HMAC do corpo, verificada antes de

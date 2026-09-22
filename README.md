@@ -4,7 +4,7 @@ API REST de pedidos com pagamento por gateway externo, construída em Java 21 co
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
 
-> **Status:** em construção — Etapa 10 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 11 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -258,6 +258,52 @@ Registros de idempotência com mais de 30 dias são removidos — passada a jane
 
 Do outbox, só saem as linhas **já publicadas**. Um evento pendente de 40 dias não é lixo — é a prova de um problema, e o próprio evento que ninguém recebeu.
 
+### Um id de correlação que atravessa quatro processos
+
+Um pedido pago passa pela requisição HTTP do cliente, pelo webhook do gateway, pelo worker do outbox e por dois consumidores de fila. Cada um roda em thread diferente, em momento diferente. Sem um identificador comum, investigar *"o que aconteceu com o pedido 4711"* é abrir quatro trechos de log e cruzar horários na mão.
+
+O id vive no MDC do SLF4J, que o log estruturado anexa a toda linha automaticamente — nenhuma chamada de `log.info` precisa mencioná-lo. Mas o MDC é **por thread** e não atravessa fronteiras sozinho, então o id:
+
+1. entra pelo cabeçalho `X-Request-Id` (ou é gerado) e volta na resposta;
+2. é gravado na linha do `outbox`, na mesma transação do evento;
+3. viaja no cabeçalho da mensagem AMQP;
+4. é recolocado no MDC pelo consumidor.
+
+Jobs agendados geram o próprio id por rodada — senão o campo ficaria vazio justamente no processo que roda sozinho, longe de qualquer requisição.
+
+### O id volta na resposta, inclusive nos erros
+
+Quem recebeu um erro tem em mãos o termo de busca exato. Numa conversa de suporte, isso troca *"deu erro ontem à tarde"* por uma linha de log precisa.
+
+Por isso o filtro tem `HIGHEST_PRECEDENCE`: ele roda **antes** da cadeia de segurança. Um 401 — exatamente o tipo de resposta que alguém vai querer investigar — sairia sem identificação se o filtro viesse depois. Há um teste para isso.
+
+### Log estruturado só no perfil de container
+
+`logging.structured.format.console=ecs` no perfil `docker`; no desenvolvimento local o log continua legível por humanos. Em produção ninguém lê log com os olhos: o formato existe para ser filtrado por campo, e é ali que o `correlacaoId` vira um campo de verdade em vez de texto no meio da mensagem.
+
+O Spring Boot 4 traz isso nativo — **não há `logback.xml` neste projeto**.
+
+### Métricas de negócio, não só técnicas
+
+O Actuator entrega de graça latência HTTP, pool de conexões, memória e GC. Elas respondem *"a aplicação está saudável?"*. As de negócio respondem a pergunta que importa quando o problema é silencioso: *"o dinheiro está entrando e as promessas estão sendo cumpridas?"*
+
+| Métrica | Responde |
+|---|---|
+| `pedidos_criados` / `pedidos_idempotencia_repetidos` | volume real vs. reenvios |
+| `pedidos_webhook_eventos{resultado}` | o gateway está entregando? quanto é repetição? |
+| `pedidos_outbox_publicacoes{resultado}` | a entrega está falhando? |
+| **`pedidos_outbox_pendentes`** | **a fila está travada?** |
+| `pedidos_consumo_mensagens{consumidor,resultado}` | cada consumidor está vivo? |
+| `pedidos_expirados` | quantos carrinhos estão sendo abandonados |
+
+A mais importante é `pedidos_outbox_pendentes`. Um pedido pago cujo evento não saiu do outbox é o pior tipo de falha: a API responde 200, o cliente vê tudo certo, o health check fica verde — e o estoque nunca baixa, o cliente nunca é avisado. **Nenhuma métrica técnica acusa isso.** Uma fila de pendentes que só cresce, acusa.
+
+Todas ficam numa classe só. Nome de métrica inventado em cada ponto de chamada é como se acaba com `pedido.criado` e `pedidos_criados` convivendo, e nenhum painel fechando.
+
+### Métricas exigem `ADMIN`; health continua público
+
+`/actuator/health` é público porque quem monitora não tem token. Já `/actuator/prometheus` conta volume de pedidos, taxa de falha e tamanho de fila — mapa pronto de quando a loja está fragilizada. Fica sob `ADMIN`.
+
 ### Consultar o gateway não confirma o pedido
 
 `GET /pagamento` atualiza o status da cobrança, mas **não** leva o pedido a `PAGO`, mesmo quando o gateway diz "aprovado". Essa transição é trabalho exclusivo do webhook (Etapa 7). Ter dois caminhos capazes de confirmar um pedido significaria manter duas implementações corretas da mesma regra — e a segunda, a que ninguém lembra de testar, é a que confirma um pedido duas vezes.
@@ -485,6 +531,7 @@ O que existe até aqui.
 | `GET` | `/api/pedidos/{id}/pagamento` | dono do pedido ou `ADMIN` |
 | `POST` | `/api/webhooks/gateway` | público, autenticado por assinatura HMAC |
 | `GET` | `/actuator/health` | público |
+| `GET` | `/actuator/prometheus` | `ADMIN` |
 
 Autenticação por token no cabeçalho:
 
@@ -595,7 +642,7 @@ Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway 
 - [x] **Etapa 8** — **Padrão outbox**: tabela, publicação transacional, worker de entrega, teste de falha na publicação
 - [x] **Etapa 9** — Consumidores dos eventos: baixa de estoque e notificação, ambos idempotentes
 - [x] **Etapa 10** — Expiração automática de pedidos não pagos e devolução de estoque
-- [ ] **Etapa 11** — Observabilidade: métricas do Actuator, logs estruturados com id de correlação
+- [x] **Etapa 11** — Observabilidade: métricas do Actuator, logs estruturados com id de correlação
 - [ ] **Etapa 12** — Testes de integração com Testcontainers (PostgreSQL + RabbitMQ) e WireMock
 - [ ] **Etapa 13** — Dockerfile, Compose completo, CI no GitHub Actions
 - [ ] **Etapa 14** — Documentação OpenAPI/Swagger

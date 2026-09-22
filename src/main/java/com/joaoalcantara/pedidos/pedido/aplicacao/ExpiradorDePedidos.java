@@ -10,6 +10,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import com.joaoalcantara.pedidos.comum.config.PropriedadesDeExpiracao;
+import com.joaoalcantara.pedidos.comum.observabilidade.Correlacao;
+import com.joaoalcantara.pedidos.comum.observabilidade.Metricas;
 import com.joaoalcantara.pedidos.pedido.dominio.PedidoRepositorio;
 
 /**
@@ -33,19 +35,21 @@ public class ExpiradorDePedidos {
     private final PedidoRepositorio pedidos;
     private final CanceladorDePedido cancelador;
     private final PropriedadesDeExpiracao propriedades;
+    private final Metricas metricas;
     private final Clock relogio;
 
     ExpiradorDePedidos(PedidoRepositorio pedidos, CanceladorDePedido cancelador,
-                       PropriedadesDeExpiracao propriedades, Clock relogio) {
+                       PropriedadesDeExpiracao propriedades, Metricas metricas, Clock relogio) {
         this.pedidos = pedidos;
         this.cancelador = cancelador;
         this.propriedades = propriedades;
+        this.metricas = metricas;
         this.relogio = relogio;
     }
 
     @Scheduled(fixedDelayString = "${pedidos.expiracao.intervalo-ms:60000}")
     public void rodar() {
-        expirarVencidos();
+        Correlacao.executarCom(Correlacao.gerar(), this::expirarVencidos);
     }
 
     /**
@@ -80,6 +84,7 @@ public class ExpiradorDePedidos {
         }
 
         if (expirados > 0) {
+            metricas.pedidosExpirados(expirados);
             log.info("{} pedido(s) expirado(s) por falta de pagamento; estoque devolvido.", expirados);
         }
         return expirados;

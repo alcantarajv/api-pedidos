@@ -7,6 +7,7 @@ import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
+import com.joaoalcantara.pedidos.comum.observabilidade.Correlacao;
 import com.joaoalcantara.pedidos.outbox.dominio.FalhaNaPublicacaoException;
 import com.joaoalcantara.pedidos.outbox.dominio.OutboxEvento;
 import com.joaoalcantara.pedidos.outbox.dominio.PublicadorDeMensagem;
@@ -56,6 +57,11 @@ class PublicadorRabbit implements PublicadorDeMensagem {
                     mensagem.getMessageProperties().setContentType("application/json");
                     // Cabecalho lido pelo consumidor como chave de idempotencia.
                     mensagem.getMessageProperties().setHeader(CABECALHO_ID_EVENTO, evento.getIdEvento());
+                    // O id de correlacao atravessa a fila: o consumidor o
+                    // recoloca no MDC e o log dos dois lados fica ligado.
+                    if (evento.getCorrelacaoId() != null) {
+                        mensagem.getMessageProperties().setHeader(Correlacao.CABECALHO_AMQP, evento.getCorrelacaoId());
+                    }
                     mensagem.getMessageProperties().setMessageId(evento.getIdEvento());
                     return mensagem;
                 },

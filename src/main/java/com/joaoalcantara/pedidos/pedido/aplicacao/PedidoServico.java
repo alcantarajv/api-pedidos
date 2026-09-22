@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.joaoalcantara.pedidos.comum.erro.RecursoNaoEncontradoException;
+import com.joaoalcantara.pedidos.comum.observabilidade.Metricas;
 import com.joaoalcantara.pedidos.pedido.api.PedidoRequisicao;
 import com.joaoalcantara.pedidos.pedido.dominio.Pedido;
 import com.joaoalcantara.pedidos.pedido.dominio.PedidoRepositorio;
@@ -19,11 +20,14 @@ public class PedidoServico {
     private final PedidoRepositorio pedidos;
     private final CriadorDePedido criador;
     private final CanceladorDePedido cancelador;
+    private final Metricas metricas;
 
-    public PedidoServico(PedidoRepositorio pedidos, CriadorDePedido criador, CanceladorDePedido cancelador) {
+    public PedidoServico(PedidoRepositorio pedidos, CriadorDePedido criador, CanceladorDePedido cancelador,
+                         Metricas metricas) {
         this.pedidos = pedidos;
         this.criador = criador;
         this.cancelador = cancelador;
+        this.metricas = metricas;
     }
 
     /**
@@ -55,17 +59,20 @@ public class PedidoServico {
 
         var existente = pedidos.porChaveDeIdempotencia(autenticado.id(), chaveIdempotencia);
         if (existente.isPresent()) {
+            metricas.pedidoRepetido();
             return ResultadoDeCriacao.jaExistia(carregarComItens(existente.get().getId()));
         }
 
         try {
             Pedido criado = criador.criar(autenticado.id(), chaveIdempotencia, requisicao);
+            metricas.pedidoCriado();
             return ResultadoDeCriacao.novo(carregarComItens(criado.getId()));
         } catch (DataIntegrityViolationException e) {
             // A transacao anterior ja terminou em rollback — inclusive as reservas
             // de estoque que ela tinha feito. Esta leitura roda em transacao nova.
             Pedido vencedor = pedidos.porChaveDeIdempotencia(autenticado.id(), chaveIdempotencia)
                     .orElseThrow(() -> e);
+            metricas.pedidoRepetido();
             return ResultadoDeCriacao.jaExistia(carregarComItens(vencedor.getId()));
         }
     }

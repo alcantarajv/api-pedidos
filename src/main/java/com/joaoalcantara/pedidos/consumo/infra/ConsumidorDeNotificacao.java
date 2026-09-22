@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.joaoalcantara.pedidos.comum.observabilidade.Correlacao;
 import com.joaoalcantara.pedidos.consumo.aplicacao.ConsumoIdempotente;
 import com.joaoalcantara.pedidos.consumo.dominio.Notificacao;
 import com.joaoalcantara.pedidos.consumo.dominio.NotificacaoRepositorio;
@@ -50,7 +51,13 @@ public class ConsumidorDeNotificacao {
 
     @RabbitListener(queues = FilaConfig.FILA_NOTIFICACOES)
     public void receber(@Payload String corpo,
-                        @Header(name = "x-id-evento", required = false) String idEvento) {
+                        @Header(name = "x-id-evento", required = false) String idEvento,
+                        @Header(name = Correlacao.CABECALHO_AMQP, required = false) String correlacaoId) {
+
+        Correlacao.executarCom(correlacaoId, () -> processar(corpo, idEvento));
+    }
+
+    private void processar(String corpo, String idEvento) {
 
         if (idEvento == null || idEvento.isBlank()) {
             throw new IllegalArgumentException("Mensagem sem o cabecalho x-id-evento");
