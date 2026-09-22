@@ -4,7 +4,7 @@ API REST de pedidos com pagamento por gateway externo, construída em Java 21 co
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
 
-> **Status:** em construção — Etapa 13 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 14 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -348,6 +348,28 @@ Suíte e imagem são jobs distintos. Assim o resultado dos testes aparece sem es
 
 Os relatórios de teste são publicados **mesmo quando a suíte falha** (`if: always()`). Sem isso, um teste vermelho no CI obrigaria a reproduzir localmente só para saber o que quebrou.
 
+### springdoc 3.x, não 2.x
+
+Esta é a armadilha de versão mais cara desta etapa: **springdoc 2.x é para Spring Boot 3**. Com Boot 4 e Jackson 3 ele nem sobe. A linha compatível é a 3.x — e praticamente todo tutorial online mostra a 2.x.
+
+### O esquema de segurança é declarado uma vez, globalmente
+
+Se o `SecurityScheme` não for registrado em `OpenApiConfig`, o botão **Authorize** simplesmente não aparece, e o Swagger UI vira uma lista bonita onde toda chamada protegida volta 401.
+
+A exigência de token é global, e as rotas públicas a desmarcam individualmente com `@SecurityRequirements`. Esquecer isso no `/login` cria um círculo perfeito: o Swagger manda `Authorization` na chamada que existe justamente para *obter* o token. Há um teste que verifica que `login`, `registrar`, o catálogo e o webhook não aparecem exigindo autenticação.
+
+### A documentação também tem teste
+
+Documentação gerada quebra em silêncio: um controller renomeado, uma anotação no lugar errado, e a página continua abrindo — só que sem o endpoint. Ninguém percebe, porque ninguém abre o Swagger todo dia.
+
+`DocumentacaoIT` verifica que o documento é gerado, que os dez endpoints estão lá, que o esquema de autenticação existe e que o `Idempotency-Key` aparece como parâmetro **obrigatório** — justamente a parte da API que um integrador não adivinha sozinho.
+
+### A documentação explica o *porquê*, não só o formato
+
+O campo `description` de cada operação carrega a decisão por trás dela: por que reenviar a mesma chave devolve 200 em vez de 201, por que pedido de outro cliente é 404 e não 403, por que consultar o gateway não confirma o pedido, por que o webhook responde 200 até para evento repetido.
+
+Uma referência que só lista campos obriga quem integra a descobrir o comportamento por tentativa e erro.
+
 ### Consultar o gateway não confirma o pedido
 
 `GET /pagamento` atualiza o status da cobrança, mas **não** leva o pedido a `PAGO`, mesmo quando o gateway diz "aprovado". Essa transição é trabalho exclusivo do webhook (Etapa 7). Ter dois caminhos capazes de confirmar um pedido significaria manter duas implementações corretas da mesma regra — e a segunda, a que ninguém lembra de testar, é a que confirma um pedido duas vezes.
@@ -576,6 +598,8 @@ O que existe até aqui.
 | `POST` | `/api/webhooks/gateway` | público, autenticado por assinatura HMAC |
 | `GET` | `/actuator/health` | público |
 | `GET` | `/actuator/prometheus` | `ADMIN` |
+| `GET` | `/swagger-ui.html` | público |
+| `GET` | `/v3/api-docs` | público |
 
 Autenticação por token no cabeçalho:
 
@@ -753,7 +777,7 @@ Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway 
 - [x] **Etapa 11** — Observabilidade: métricas do Actuator, logs estruturados com id de correlação
 - [x] **Etapa 12** — Testes de integração com Testcontainers (PostgreSQL + RabbitMQ) e WireMock
 - [x] **Etapa 13** — Dockerfile, Compose completo, CI no GitHub Actions
-- [ ] **Etapa 14** — Documentação OpenAPI/Swagger
+- [x] **Etapa 14** — Documentação OpenAPI/Swagger
 - [ ] **Etapa 15** — Deploy público e README final com link ao vivo
 
 ---

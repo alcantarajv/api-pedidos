@@ -12,6 +12,14 @@ import org.springframework.web.bind.annotation.RestController;
 import com.joaoalcantara.pedidos.webhook.aplicacao.CobrancaDesconhecidaException;
 import com.joaoalcantara.pedidos.webhook.aplicacao.WebhookServico;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 /**
  * Endpoint que o gateway chama quando o estado de uma cobranca muda.
  *
@@ -25,6 +33,7 @@ import com.joaoalcantara.pedidos.webhook.aplicacao.WebhookServico;
  * e serializar de novo para conferir mudaria espacos e ordem de campos, e a
  * assinatura deixaria de bater por um motivo invisivel no JSON.</p>
  */
+@Tag(name = "Webhook", description = "Notificacoes do gateway de pagamento")
 @RestController
 @RequestMapping("/api/webhooks/gateway")
 public class WebhookController {
@@ -37,8 +46,30 @@ public class WebhookController {
         this.servico = servico;
     }
 
+    @Operation(summary = "Recebe um evento do gateway",
+            description = """
+                    Chamado pelo gateway, nao por clientes da API. Nao usa token: quem autentica a
+                    requisicao e a assinatura HMAC do corpo, no cabecalho `Stripe-Signature`.
+
+                    **A entrega e \"pelo menos uma vez\"** — o mesmo evento chega mais de uma vez, por
+                    definicao. O identificador do evento e gravado numa tabela com restricao de
+                    unicidade, na MESMA transacao que aplica o efeito: a segunda entrega colide e a
+                    transacao inteira e desfeita, sem efeito duplicado.
+
+                    Responde 200 tanto no processamento quanto na repeticao — e o que faz o gateway
+                    parar de reenviar. Erros de verdade devolvem 4xx/5xx de proposito, para que ele
+                    reentregue.
+                    """)
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Evento processado, repetido, ou de cobranca desconhecida"),
+            @ApiResponse(responseCode = "400", description = "Corpo fora do formato esperado", content = @Content),
+            @ApiResponse(responseCode = "401", description = "Assinatura ausente, invalida ou vencida", content = @Content),
+            @ApiResponse(responseCode = "422", description = "O evento nao pode ser aplicado (pedido cancelado, por exemplo): o gateway deve reentregar", content = @Content)
+    })
+    @SecurityRequirements
     @PostMapping
     public ResponseEntity<Void> receber(@RequestBody String corpoCru,
+                                        @Parameter(description = "Assinatura HMAC-SHA256 no formato t=<carimbo>,v1=<hmac>", required = true)
                                         @RequestHeader(name = "Stripe-Signature", required = false) String assinatura) {
         try {
             WebhookServico.Resultado resultado = servico.receber(corpoCru, assinatura);

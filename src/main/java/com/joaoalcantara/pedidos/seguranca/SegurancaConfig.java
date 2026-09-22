@@ -45,6 +45,12 @@ public class SegurancaConfig {
                         .requestMatchers(HttpMethod.POST, "/api/auth/registrar", "/api/auth/login").permitAll()
                         .requestMatchers("/actuator/health/**").permitAll()
 
+                        // Documentacao publica: o objetivo dela e justamente ser
+                        // alcancavel antes de ter um token. Numa API com dados
+                        // sensiveis valeria restringir por rede ou papel — aqui,
+                        // e o cartao de visita do projeto.
+                        .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+
                         // Metricas so para ADMIN. Elas contam o volume de
                         // pedidos, a taxa de falha e o tamanho da fila — mapa
                         // pronto de quando a loja esta fragilizada.

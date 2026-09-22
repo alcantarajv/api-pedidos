@@ -18,6 +18,12 @@ import com.joaoalcantara.pedidos.produto.aplicacao.ProdutoServico;
 import com.joaoalcantara.pedidos.produto.dominio.Produto;
 import com.joaoalcantara.pedidos.seguranca.UsuarioAutenticado;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 
 /**
@@ -32,6 +38,7 @@ import jakarta.validation.Valid;
  * estoque. Por isso o principal e injetado aqui, ainda que a rota seja aberta —
  * ele vem nulo para visitante anonimo.</p>
  */
+@Tag(name = "Catalogo", description = "Consulta publica e gestao administrativa de produtos")
 @RestController
 @RequestMapping("/api/produtos")
 public class ProdutoController {
@@ -42,6 +49,10 @@ public class ProdutoController {
         this.servico = servico;
     }
 
+    @Operation(summary = "Lista produtos",
+            description = "Publico. Com token de ADMIN a resposta traz tambem as parcelas internas "
+                    + "do estoque (reservado e total); sem ele, so o disponivel.")
+    @SecurityRequirements
     @GetMapping
     public List<ProdutoVisao> listar(@RequestParam(defaultValue = "true") boolean apenasAtivos,
                                      @AuthenticationPrincipal UsuarioAutenticado autenticado) {
@@ -50,12 +61,19 @@ public class ProdutoController {
                 .toList();
     }
 
+    @Operation(summary = "Busca um produto", description = "Publico.")
+    @SecurityRequirements
     @GetMapping("/{id}")
     public ProdutoVisao buscar(@PathVariable Long id,
                                @AuthenticationPrincipal UsuarioAutenticado autenticado) {
         return visaoPara(servico.buscar(id), autenticado);
     }
 
+    @Operation(summary = "Cria um produto", description = "Exige papel ADMIN.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "201", description = "Produto criado"),
+            @ApiResponse(responseCode = "409", description = "Ja existe produto com esse nome", content = @Content)
+    })
     @PostMapping
     public ResponseEntity<ProdutoAdminResposta> criar(@Valid @RequestBody ProdutoRequisicao requisicao) {
         Produto produto = servico.criar(requisicao);
@@ -64,6 +82,9 @@ public class ProdutoController {
                 .body(ProdutoAdminResposta.de(produto));
     }
 
+    @Operation(summary = "Atualiza nome, descricao e preco",
+            description = "Exige ADMIN. NAO altera estoque nem pedidos existentes: o preco de cada "
+                    + "item fica congelado no momento da compra.")
     @PutMapping("/{id}")
     public ProdutoAdminResposta atualizar(@PathVariable Long id, @Valid @RequestBody ProdutoRequisicao requisicao) {
         return ProdutoAdminResposta.de(servico.atualizar(id, requisicao));
@@ -74,6 +95,14 @@ public class ProdutoController {
      * mercadoria e correcao de cadastro sao operacoes diferentes, feitas em
      * momentos diferentes e possivelmente por pessoas diferentes.
      */
+    @Operation(summary = "Ajusta o estoque disponivel",
+            description = """
+                    Exige ADMIN. O corpo traz a quantidade FINAL, nao um incremento: reenviar a mesma
+                    requisicao leva ao mesmo estado, em vez de somar de novo.
+
+                    So mexe no disponivel. O reservado pertence a pedidos de clientes reais e so muda
+                    pelo ciclo de vida do pedido.
+                    """)
     @PutMapping("/{id}/estoque")
     public ProdutoAdminResposta ajustarEstoque(@PathVariable Long id, @Valid @RequestBody EstoqueRequisicao requisicao) {
         return ProdutoAdminResposta.de(servico.ajustarEstoque(id, requisicao.estoqueDisponivel()));
@@ -84,6 +113,9 @@ public class ProdutoController {
      * com significado de negocio (parar de aceitar pedidos novos), nao a edicao
      * de um atributo qualquer.
      */
+    @Operation(summary = "Ativa ou desativa o produto",
+            description = "Exige ADMIN. Desativar impede pedidos NOVOS; os que ja existem continuam "
+                    + "valendo, e o estoque reservado por eles nao e devolvido.")
     @PutMapping("/{id}/situacao")
     public ProdutoAdminResposta alterarSituacao(@PathVariable Long id, @Valid @RequestBody SituacaoRequisicao requisicao) {
         return ProdutoAdminResposta.de(servico.alterarSituacao(id, requisicao.ativo()));

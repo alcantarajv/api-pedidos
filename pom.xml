@@ -18,8 +18,11 @@
 	<properties>
 		<java.version>21</java.version>
 		<jjwt.version>0.13.0</jjwt.version>
-		<!-- Nao gerenciado pela BOM do Spring Boot 4: a versao e nossa. -->
+		<!-- Nao gerenciados pela BOM do Spring Boot 4: as versoes sao nossas. -->
 		<wiremock.version>3.13.1</wiremock.version>
+		<!-- springdoc 3.x e a linha compativel com Spring Boot 4 e Jackson 3.
+		     A 2.x, que aparece em todo tutorial, e para Boot 3 e nem sobe aqui. -->
+		<springdoc.version>3.1.0</springdoc.version>
 	</properties>
 
 	<dependencies>
@@ -90,6 +93,12 @@
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+			<version>${springdoc.version}</version>
 		</dependency>
 
 		<!-- JWT: api em tempo de compilacao, implementacao e parser apenas em runtime -->
