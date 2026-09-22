@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build e testes
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configura Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          # Cache do ~/.m2 gerenciado pela propria action, com chave derivada do pom.
+          cache: maven
+
+      # Git no Windows nao versiona o bit de execucao (core.fileMode = false por
+      # padrao), entao o mvnw chega ao runner Linux sem permissao de execucao e
+      # "./mvnw" falha com "Permission denied". Uma linha aqui torna o CI imune a
+      # isso, independente de como o arquivo foi commitado.
+      - name: Garante o bit de execucao do wrapper
+        run: chmod +x ./mvnw
+
+      # O runner do GitHub ja tem Docker, o que permite ao Testcontainers subir o
+      # PostgreSQL e o RabbitMQ reais que os testes de integracao exigem. Os
+      # containers sao estaticos e compartilhados pela suite: dois no total, em
+      # vez de um par por contexto de teste.
+      - name: Build e suite completa
+        run: ./mvnw -B verify
+
+      # Publicado mesmo quando a suite falha: sem isso, um teste vermelho no CI
+      # obrigaria a reproduzir localmente para saber o que quebrou.
+      - name: Publica relatorios de teste
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorios-de-teste
+          path: |
+            target/surefire-reports/
+            target/failsafe-reports/
+          retention-days: 7
+
+  imagem:
+    name: Build da imagem Docker
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Constroi sem publicar: garante que o Dockerfile continua valido a cada
+      # mudanca, sem exigir credenciais de registry no repositorio.
+      #
+      # E um job separado de proposito: assim o resultado da suite aparece no
+      # Actions sem esperar o build da imagem, e fica obvio qual dos dois quebrou.
+      - name: Constroi a imagem
+        run: docker build -t pedidos:${{ github.sha }} .
+
+      # Uma imagem que sobe mas nao responde nao serve. O smoke test confirma que
+      # o jar empacotado inicia — aqui ele deve FALHAR na configuracao, provando
+      # que a validacao de propriedades da Etapa 3 esta ativa na imagem.
+      - name: Verifica que a imagem recusa subir sem segredo
+        run: |
+          set +e
+          saida=$(docker run --rm pedidos:${{ github.sha }} 2>&1)
+          codigo=$?
+          set -e
+          echo "$saida" | tail -30
+          if [ $codigo -eq 0 ]; then
+            echo "A aplicacao subiu sem JWT_SECRET, o que nao deveria acontecer."
+            exit 1
+          fi
+          echo "$saida" | grep -q "JWT_SECRET" || {
+            echo "Falhou, mas nao pela razao esperada."
+            exit 1
+          }
+          echo "OK: a imagem recusa subir mal configurada."

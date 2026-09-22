@@ -4,7 +4,7 @@ API REST de pedidos com pagamento por gateway externo, construída em Java 21 co
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
 
-> **Status:** em construção — Etapa 12 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
+> **Status:** em construção — Etapa 13 de 15. O [roadmap](#roadmap) mostra o que já está pronto e o que vem a seguir.
 
 ---
 
@@ -305,6 +305,49 @@ Todas ficam numa classe só. Nome de métrica inventado em cada ponto de chamada
 
 `/actuator/health` é público porque quem monitora não tem token. Já `/actuator/prometheus` conta volume de pedidos, taxa de falha e tamanho de fila — mapa pronto de quando a loja está fragilizada. Fica sob `ADMIN`.
 
+### Build em duas etapas, imagem final sem Maven
+
+A primeira etapa compila; a segunda carrega só o JRE e o jar. O wrapper e o `pom.xml` são copiados **antes** do código: enquanto o `pom` não muda, o download de dependências fica em cache. Inverter essas duas cópias transformaria qualquer alteração de código num download completo do repositório Maven.
+
+Os testes de integração não rodam no build da imagem — eles precisam do Docker, e subir Testcontainers de dentro de um build exigiria acesso ao socket do host, o que é frágil e inseguro. Quem roda a suíte é o CI.
+
+### A aplicação não roda como root
+
+`USER pedidos` na imagem. Se a aplicação for comprometida, o atacante não ganha root dentro do contêiner. Verificado: `uid=100(pedidos)`.
+
+E `-XX:MaxRAMPercentage=75.0`, porque JVM em contêiner sem esse ajuste ignora o limite do cgroup e acaba morta pelo orquestrador por consumo de memória.
+
+### A aplicação fica num profile do Compose
+
+`docker compose up -d` sobe **só** banco e broker — o modo do dia a dia, com a aplicação rodando pela IDE. `docker compose --profile completo up --build` sobe tudo.
+
+Dois detalhes que costumam morder:
+
+- **`depends_on` com `condition: service_healthy`**, não apenas `service_started`. O PostgreSQL aceita conexão antes de estar pronto para consultas, e o Flyway quebraria na largada.
+- **Os hostnames são os nomes dos serviços** (`db`, `broker`), não `localhost`. Dentro do contêiner, `localhost` é o próprio contêiner — é o erro mais comum ao containerizar uma aplicação que funcionava fora.
+
+Nenhum segredo aparece no `compose.yaml`, que é versionado: eles vêm do `.env` local, sem valor padrão.
+
+### O health check do contêiner usa o do Actuator
+
+```
+wget -q -O - http://localhost:8080/actuator/health | grep -q '"status":"UP"'
+```
+
+O health do Actuator agrega banco e broker. "De pé" aqui significa que a aplicação alcança as duas dependências — não apenas que o processo subiu. Um contêiner que responde na porta mas perdeu o banco é pior do que um contêiner parado, porque o orquestrador continua mandando tráfego para ele.
+
+### O CI testa que a imagem recusa subir mal configurada
+
+O job da imagem não só constrói: ele **roda** o contêiner sem `JWT_SECRET` e exige que a aplicação falhe, com a mensagem certa. É um teste ao contrário — verificar que algo *não* funciona — e ele guarda uma proteção que, se sumisse, sumiria em silêncio.
+
+Imagem que constrói mas não sobe não serve; imagem que sobe sem segredo é pior ainda.
+
+### Dois jobs separados no CI
+
+Suíte e imagem são jobs distintos. Assim o resultado dos testes aparece sem esperar o build da imagem, e fica óbvio qual dos dois quebrou. O `chmod +x ./mvnw` existe porque o Git no Windows não versiona o bit de execução, e sem ele o runner Linux falha com `Permission denied` — o tipo de erro que consome uma tarde na primeira vez.
+
+Os relatórios de teste são publicados **mesmo quando a suíte falha** (`if: always()`). Sem isso, um teste vermelho no CI obrigaria a reproduzir localmente só para saber o que quebrou.
+
 ### Consultar o gateway não confirma o pedido
 
 `GET /pagamento` atualiza o status da cobrança, mas **não** leva o pedido a `PAGO`, mesmo quando o gateway diz "aprovado". Essa transição é trabalho exclusivo do webhook (Etapa 7). Ter dois caminhos capazes de confirmar um pedido significaria manter duas implementações corretas da mesma regra — e a segunda, a que ninguém lembra de testar, é a que confirma um pedido duas vezes.
@@ -604,6 +647,16 @@ curl http://localhost:8080/actuator/health
 
 O `health` agrega o estado do banco e do broker: se qualquer um dos dois estiver fora, a resposta é `DOWN` com o detalhe de qual falhou.
 
+### Tudo em contêiner
+
+```bash
+docker compose --profile completo up --build
+```
+
+Sobe banco, broker e a aplicação empacotada. A aplicação só inicia depois de banco e broker responderem *healthy*, e ela própria só é considerada saudável quando alcança as duas.
+
+O `.env` precisa ter `JWT_SECRET`, `STRIPE_API_KEY` e `STRIPE_WEBHOOK_SECRET` — sem eles o contêiner falha no boot dizendo qual falta.
+
 ### Sem Docker Compose
 
 Pela IDE, a classe `TestPedidosApplication` sobe a aplicação com PostgreSQL e RabbitMQ descartáveis via Testcontainers — as duas dependências nascem com o processo e morrem junto, e cada execução começa com o banco limpo.
@@ -699,7 +752,7 @@ Java 21 · Spring Boot 4 · Spring Security · PostgreSQL · RabbitMQ · Flyway 
 - [x] **Etapa 10** — Expiração automática de pedidos não pagos e devolução de estoque
 - [x] **Etapa 11** — Observabilidade: métricas do Actuator, logs estruturados com id de correlação
 - [x] **Etapa 12** — Testes de integração com Testcontainers (PostgreSQL + RabbitMQ) e WireMock
-- [ ] **Etapa 13** — Dockerfile, Compose completo, CI no GitHub Actions
+- [x] **Etapa 13** — Dockerfile, Compose completo, CI no GitHub Actions
 - [ ] **Etapa 14** — Documentação OpenAPI/Swagger
 - [ ] **Etapa 15** — Deploy público e README final com link ao vivo
 

@@ -1,0 +1,9 @@
+target/
+.git/
+.github/
+.idea/
+*.iml
+.env
+README.md
+CLAUDE.md
+compose.yaml

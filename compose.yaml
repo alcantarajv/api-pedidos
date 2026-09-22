@@ -38,6 +38,57 @@ services:
       timeout: 10s
       retries: 10
 
+  # A aplicacao. Fica num profile para que "docker compose up -d" continue
+  # subindo so a infraestrutura — que e o modo do dia a dia, com a aplicacao
+  # rodando pela IDE. Para subir tudo:
+  #
+  #     docker compose --profile completo up --build
+  app:
+    build: .
+    container_name: pedidos-app
+    profiles: [completo]
+    environment:
+      # O hostname e o nome do servico: dentro da rede do Compose, "db" e
+      # "broker" resolvem para os containers. Usar localhost aqui e o erro mais
+      # comum — localhost, dentro do container, e o proprio container.
+      DB_URL: jdbc:postgresql://db:5432/pedidos
+      DB_USERNAME: pedidos
+      DB_PASSWORD: pedidos
+      RABBITMQ_HOST: broker
+      RABBITMQ_USERNAME: pedidos
+      RABBITMQ_PASSWORD: pedidos
+
+      # Segredos vem do .env local, nunca do compose.yaml — este arquivo e
+      # versionado. Sem valor padrao: a aplicacao recusa subir sem eles, que e o
+      # comportamento desejado.
+      JWT_SECRET: ${JWT_SECRET}
+      STRIPE_API_KEY: ${STRIPE_API_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      ADMIN_INICIAL_EMAIL: ${ADMIN_INICIAL_EMAIL:-}
+      ADMIN_INICIAL_SENHA: ${ADMIN_INICIAL_SENHA:-}
+
+      # Log estruturado e health sem detalhes: ver application-docker.properties.
+      SPRING_PROFILES_ACTIVE: docker
+    ports:
+      - "8080:8080"
+    depends_on:
+      # service_healthy, e nao apenas service_started: o Postgres aceita conexao
+      # antes de estar pronto para consultas, e o Flyway quebraria na largada.
+      db:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+    healthcheck:
+      # O health do Actuator agrega banco e broker: "de pe" aqui significa que a
+      # aplicacao alcanca as duas dependencias, nao so que o processo subiu.
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      # Damos tempo de sobra para o primeiro boot (Flyway, pool, filas) antes de
+      # comecar a contar falhas.
+      start_period: 40s
+
 volumes:
   pedidos-db-data:
   pedidos-broker-data:
