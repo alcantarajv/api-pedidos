@@ -1,5 +1,8 @@
 # API de Pedidos e Pagamentos
 
+[![CI](https://github.com/alcantarajv/api-pedidos/actions/workflows/ci.yml/badge.svg)](https://github.com/alcantarajv/api-pedidos/actions/workflows/ci.yml)
+[![licenca MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-green.svg)](LICENSE)
+
 API REST de pedidos com pagamento por gateway externo, construída em Java 21 com Spring Boot 4, PostgreSQL e RabbitMQ.
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
@@ -873,3 +876,9 @@ Este é o terceiro de uma série, e cada um ataca um problema diferente de backe
 
 **João Vitor Alcântara Corrêa**
 [GitHub](https://github.com/alcantarajv) · [LinkedIn](https://linkedin.com/in/joaovalcantara)
+
+---
+
+## Licença
+
+[MIT](LICENSE).
