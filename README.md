@@ -15,7 +15,7 @@ O que este projeto resolve não é o CRUD de produtos — é o que acontece quan
 
 A raiz traz uma página que executa a demonstração da idempotência **ao vivo**: ela cria uma conta, monta um pedido e reenvia **a mesma requisição com a mesma `Idempotency-Key`**, mostrando `201` na primeira e `200` na segunda — com o mesmo pedido e o estoque saindo uma vez só. É o argumento central do projeto rodando no navegador, sem precisar de terminal.
 
-O serviço roda no plano gratuito do Render e hiberna quando ocioso — a primeira requisição depois de um tempo parado pode levar alguns segundos.
+O serviço roda no plano gratuito do Render e hiberna quando ocioso: a primeira requisição depois de um tempo parado leva cerca de um minuto para responder — as seguintes são imediatas.
 
 ---
 
