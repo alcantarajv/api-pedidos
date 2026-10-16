@@ -7,6 +7,8 @@ API REST de pedidos com pagamento por gateway externo, construída em Java 21 co
 
 O que este projeto resolve não é o CRUD de produtos — é o que acontece quando a aplicação **depende de outro sistema**: o webhook do gateway que chega duas vezes, e a gravação no banco que precisa acontecer junto com a publicação na fila sem que exista transação entre os dois.
 
+---
+
 ## No ar
 
 **<https://api-pedidos-yi5d.onrender.com>**
@@ -22,24 +24,25 @@ O serviço roda no plano gratuito do Render e hiberna quando ocioso: a primeira 
 ## Sumário
 
 - [No ar](#no-ar)
-- [Os dois problemas centrais](#os-dois-problemas-centrais)
-  - [Problema 1 — O webhook que chega duas vezes](#problema-1--o-webhook-que-chega-duas-vezes)
-  - [Problema 2 — Gravar no banco e publicar na fila](#problema-2--gravar-no-banco-e-publicar-na-fila)
+- [O problema central](#o-problema-central)
 - [Decisões técnicas](#decisões-técnicas)
-  - [Registro completo das 84 decisões](docs/decisoes-tecnicas.md)
-- [Modelo de domínio](#modelo-de-domínio)
-- [Regras de negócio](#regras-de-negócio)
+  - [Registro completo das decisões](docs/decisoes-tecnicas.md)
+- [Domínio e regras de negócio](#domínio-e-regras-de-negócio)
 - [API](#api)
 - [Como rodar](#como-rodar)
 - [Testes](#testes)
 - [Stack](#stack)
-- [Roadmap](#roadmap)
+- [Projetos relacionados](#projetos-relacionados)
+- [Autor](#autor)
+- [Licença](#licença)
 
 ---
 
-## Os dois problemas centrais
+## O problema central
 
-### Problema 1 — O webhook que chega duas vezes
+Consistência entre sistemas: a aplicação depende de um gateway de pagamento e de um broker de mensagens, e não existe transação que abrace os três. O problema aparece de duas formas.
+
+### 1. O webhook que chega duas vezes
 
 Quando um pagamento é aprovado, o gateway avisa a aplicação por webhook. Essa notificação **vai chegar mais de uma vez** — não é falha, é como gateways funcionam. A entrega é "pelo menos uma vez": se a resposta demora, se volta um 500, se a conexão cai depois do processamento mas antes da confirmação, o mesmo evento é reenviado.
 
@@ -67,7 +70,7 @@ Ou as duas coisas acontecem, ou nenhuma. A segunda entrega colide na restrição
 
 O mesmo raciocínio vale na entrada da API: a criação de pedido aceita um cabeçalho `Idempotency-Key`, para que o cliente possa reenviar a requisição depois de um timeout sem criar dois pedidos.
 
-### Problema 2 — Gravar no banco e publicar na fila
+### 2. Gravar no banco e publicar na fila
 
 Confirmado o pagamento, a aplicação precisa fazer duas coisas: gravar a mudança no PostgreSQL e publicar um evento no RabbitMQ para que o estoque seja baixado e o cliente notificado.
 
@@ -93,7 +96,7 @@ flowchart LR
 
 Repare no que o outbox **não** promete: entrega exatamente uma vez. Se o worker publica e morre antes de marcar a linha como entregue, ele publica de novo na próxima rodada. O padrão troca "exatamente uma vez" — impossível entre sistemas que não compartilham transação — por "**pelo menos uma vez, com consumidor idempotente**".
 
-É por isso que os dois problemas deste projeto são o mesmo problema visto de dois lados: o outbox só é seguro porque o outro lado sabe ignorar repetição.
+É por isso que as duas formas são o mesmo problema visto de dois lados: o outbox só é seguro porque o outro lado sabe ignorar repetição.
 
 Cada comportamento tem um teste que o comprova:
 
@@ -141,7 +144,11 @@ O projeto registrou 84 decisões ao longo do desenvolvimento, cada uma com o mot
 
 **RabbitMQ em vez de Kafka.** O projeto precisa de fila de trabalho — "processe este evento uma vez" —, não de log reprocessável por vários consumidores. O RabbitMQ resolve com muito menos infraestrutura; Kafka traria partições, offsets e retenção que este domínio não usa.
 
-## Modelo de domínio
+---
+
+## Domínio e regras de negócio
+
+### Modelo de domínio
 
 | Entidade | Papel |
 |---|---|
@@ -163,7 +170,7 @@ AGUARDANDO_PAGAMENTO ──> PAGO ──> SEPARANDO ──> ENVIADO ──> ENTR
 
 Transições inválidas são recusadas pelo domínio: um pedido `ENTREGUE` não volta para `PAGO`, um `CANCELADO` não avança.
 
-## Regras de negócio
+### Regras de negócio
 
 - Estoque é reservado na criação do pedido e confirmado no pagamento
 - Pedido cancelado ou expirado devolve o estoque
@@ -175,8 +182,6 @@ Transições inválidas são recusadas pelo domínio: um pedido `ENTREGUE` não 
 ---
 
 ## API
-
-O que existe até aqui.
 
 | Método | Rota | Acesso |
 |---|---|---|
@@ -357,42 +362,18 @@ O terceiro caso é o mais instrutivo: o teste de comportamento **não** falhou, 
 
 ## Stack
 
-Java 21 · Spring Boot 4.1 · Spring Security · PostgreSQL 17 · RabbitMQ 4 · Flyway · JPA/Hibernate · JJWT · Stripe · Micrometer/Prometheus · springdoc-openapi 3 · JUnit 5 · AssertJ · Mockito · Testcontainers 2 · WireMock · Docker · GitHub Actions
-
----
-
-## Roadmap
-
-Todas as quinze etapas concluídas. Cada uma virou um commit, e a seção de
-decisões técnicas acima foi alimentada a cada uma delas.
-
-
-- [x] **Etapa 0** — Repositório: README, `.gitignore`, primeiro commit
-- [x] **Etapa 1** — Scaffold Spring Boot + Docker Compose com PostgreSQL e RabbitMQ
-- [x] **Etapa 2** — Catálogo: `Produto`, migrations, CRUD administrativo, controle de estoque
-- [x] **Etapa 3** — Autenticação: `Usuario`, Spring Security, JWT, papéis `CLIENTE` e `ADMIN`
-- [x] **Etapa 4** — Criação de pedido: itens, congelamento de preço, reserva de estoque, `Idempotency-Key`
-- [x] **Etapa 5** — Máquina de estados do pedido, com transições inválidas recusadas pelo domínio
-- [x] **Etapa 6** — Integração com o gateway: criação da cobrança e consulta de status
-- [x] **Etapa 7** — **Webhook idempotente**: verificação de assinatura, tabela de eventos processados, teste de entrega duplicada
-- [x] **Etapa 8** — **Padrão outbox**: tabela, publicação transacional, worker de entrega, teste de falha na publicação
-- [x] **Etapa 9** — Consumidores dos eventos: baixa de estoque e notificação, ambos idempotentes
-- [x] **Etapa 10** — Expiração automática de pedidos não pagos e devolução de estoque
-- [x] **Etapa 11** — Observabilidade: métricas do Actuator, logs estruturados com id de correlação
-- [x] **Etapa 12** — Testes de integração com Testcontainers (PostgreSQL + RabbitMQ) e WireMock
-- [x] **Etapa 13** — Dockerfile, Compose completo, CI no GitHub Actions
-- [x] **Etapa 14** — Documentação OpenAPI/Swagger
-- [x] **Etapa 15** — Deploy público e README final com link ao vivo
+Java 21 · Spring Boot 4.1 · Spring Security · PostgreSQL 17 · RabbitMQ 4 · Flyway · JPA/Hibernate · JJWT · Stripe · Micrometer/Prometheus · springdoc-openapi 3 · JUnit 6 · AssertJ · Mockito · Testcontainers 2 · WireMock · Docker · GitHub Actions · Render · Neon
 
 ---
 
 ## Projetos relacionados
 
-Este é o terceiro de uma série, e cada um ataca um problema diferente de backend:
+Este é o terceiro de uma série de quatro projetos, e cada um ataca um problema de backend que só aparece em produção:
 
 1. [encurtador-links](https://github.com/alcantarajv/encurtador-links) — **latência**: cache com Redis, rate limiting, processamento assíncrono
 2. [reserva-quadras](https://github.com/alcantarajv/reserva-quadras) — **concorrência**: constraint de exclusão do PostgreSQL e teste multi-thread
 3. **api-pedidos** — **consistência entre sistemas**: idempotência e padrão outbox
+4. [triagem-chamados](https://github.com/alcantarajv/triagem-chamados) — **resiliência a uma dependência externa lenta, cara e instável**: fallback entre provedores de IA, circuit breaker, validação da resposta e controle de custo
 
 ---
 
